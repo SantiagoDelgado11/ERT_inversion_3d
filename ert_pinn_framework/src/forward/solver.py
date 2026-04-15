@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 import torch
 from torch import Tensor
 
@@ -11,7 +13,7 @@ from ..physics.pde import conductivity_pde_residual
 class ForwardSolver:
     """Light wrapper to evaluate potential and PDE residual with a PINN model."""
 
-    def __init__(self, model, conductivity: float | Tensor | callable = 1.0, source=None):
+    def __init__(self, model, conductivity: float | Tensor | Callable[[Tensor], Tensor] = 1.0, source=None):
         self.model = model
         self.conductivity = conductivity
         self.source = source

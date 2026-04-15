@@ -40,6 +40,12 @@ def _resolve_dtype(base_config: dict) -> torch.dtype:
     return torch.float32
 
 
+def _sanitize_dtype_for_device(dtype: torch.dtype, device: torch.device) -> torch.dtype:
+    if device.type == "cpu" and dtype == torch.float16:
+        return torch.float32
+    return dtype
+
+
 def _set_seed(seed: int, deterministic: bool = True, cudnn_benchmark: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -187,15 +193,24 @@ def _split_observations(
         train_ratio = 0.8
     if val_ratio < 0.0:
         val_ratio = 0.2
-    if train_ratio + val_ratio > 1.0:
-        val_ratio = max(0.0, 1.0 - train_ratio)
+    total_ratio = train_ratio + val_ratio
+    if total_ratio <= 0.0:
+        train_ratio = 0.8
+        val_ratio = 0.2
+        total_ratio = 1.0
+    if total_ratio > 1.0:
+        train_ratio = train_ratio / total_ratio
+        val_ratio = val_ratio / total_ratio
 
     perm = torch.as_tensor(rng.permutation(n_samples), device=points.device, dtype=torch.long)
     n_train = int(round(train_ratio * n_samples))
+    n_val = int(round(val_ratio * n_samples))
+
     n_train = max(1, min(n_samples - 1, n_train))
+    n_val = max(1, min(n_samples - n_train, n_val))
 
     train_idx = perm[:n_train]
-    val_idx = perm[n_train:]
+    val_idx = perm[n_train : n_train + n_val]
     if val_idx.numel() == 0:
         val_idx = train_idx
 
@@ -212,7 +227,7 @@ def run_training_pipeline(config: dict, output_root: Path, force_final_checkpoin
     experiment_cfg = config["experiment"]
 
     device = _resolve_device(base_cfg)
-    dtype = _resolve_dtype(base_cfg)
+    dtype = _sanitize_dtype_for_device(_resolve_dtype(base_cfg), device)
 
     project_cfg = base_cfg.get("project", {})
     runtime_cfg = base_cfg.get("runtime", {})
@@ -245,6 +260,10 @@ def run_training_pipeline(config: dict, output_root: Path, force_final_checkpoin
 
     electrodes_section = electrodes_cfg.get("electrodes", electrodes_cfg)
     electrode_points = _build_electrode_positions(electrodes_section, device=device, dtype=dtype)
+    electrode_points_np = electrode_points.detach().cpu().numpy()
+    if not domain.contains(electrode_points_np, atol=1e-6).all():
+        raise ValueError("Some configured electrode positions lie outside the domain bounds")
+
     electrode_count = electrode_points.shape[0]
     injection_cfg = electrodes_section.get("injection_patterns", {})
     injection_type = str(injection_cfg.get("type", "adjacent")).lower()
@@ -272,8 +291,15 @@ def run_training_pipeline(config: dict, output_root: Path, force_final_checkpoin
 
     solver = ForwardSolver(model=model, conductivity=1.0, source=0.0)
 
+    cached_epoch_train: int | None = None
+    cached_batch_train = None
+
     def step_fn(epoch: int):
-        batch = sampler.sample(domain)
+        nonlocal cached_epoch_train, cached_batch_train
+        if cached_epoch_train != epoch or cached_batch_train is None:
+            cached_batch_train = sampler.sample(domain)
+            cached_epoch_train = epoch
+        batch = cached_batch_train
 
         interior_np = _subsample_points(batch.interior, batch_size=batch_size, rng=sampler.rng)
         interior = _to_tensor(interior_np, device=device, dtype=dtype, requires_grad=True)
@@ -400,7 +426,7 @@ def run_inversion_pipeline(config: dict, output_root: Path) -> dict:
         raise RuntimeError("Inversion is disabled by config.inverse.inversion.enabled=false")
 
     device = _resolve_device(base_cfg)
-    dtype = _resolve_dtype(base_cfg)
+    dtype = _sanitize_dtype_for_device(_resolve_dtype(base_cfg), device)
 
     project_cfg = base_cfg.get("project", {})
     runtime_cfg = base_cfg.get("runtime", {})
@@ -542,8 +568,15 @@ def run_inversion_pipeline(config: dict, output_root: Path) -> dict:
         ),
     )
 
+    cached_epoch_inversion: int | None = None
+    cached_batch_inversion = None
+
     def step_fn(epoch: int):
-        batch = sampler.sample(domain)
+        nonlocal cached_epoch_inversion, cached_batch_inversion
+        if cached_epoch_inversion != epoch or cached_batch_inversion is None:
+            cached_batch_inversion = sampler.sample(domain)
+            cached_epoch_inversion = epoch
+        batch = cached_batch_inversion
 
         interior_np = _subsample_points(batch.interior, batch_size=batch_size, rng=sampler.rng)
         interior = _to_tensor(interior_np, device=device, dtype=dtype, requires_grad=True)

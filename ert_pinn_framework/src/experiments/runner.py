@@ -10,7 +10,7 @@ from .registry import get_experiment
 
 def load_project_config(config_dir: str | Path) -> dict:
     """Load base config and all referenced default sections."""
-    cfg_dir = Path(config_dir)
+    cfg_dir = Path(config_dir).resolve()
     base_cfg_path = cfg_dir / "base.yaml"
     base_cfg = load_yaml(base_cfg_path)
 
@@ -23,6 +23,11 @@ def load_project_config(config_dir: str | Path) -> dict:
         if rel_path is None:
             raise KeyError(f"Missing defaults entry for section '{section}' in {base_cfg_path}")
         config[section] = load_yaml(cfg_dir / rel_path)
+
+    config["_meta"] = {
+        "config_dir": str(cfg_dir),
+        "project_root": str(cfg_dir.parent),
+    }
 
     return config
 

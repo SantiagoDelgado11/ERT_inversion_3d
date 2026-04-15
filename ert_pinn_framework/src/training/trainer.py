@@ -56,9 +56,8 @@ class Trainer:
         """Run optimization loop and return per-epoch metrics."""
         history: list[dict[str, float]] = []
 
-        scaler = torch.cuda.amp.GradScaler(
-            enabled=self.config.mixed_precision and torch.cuda.is_available()
-        )
+        amp_enabled = self.config.mixed_precision and torch.cuda.is_available()
+        scaler = torch.amp.GradScaler(device="cuda", enabled=amp_enabled)
         is_lbfgs = isinstance(self.optimizer, torch.optim.LBFGS)
 
         if is_lbfgs and scaler.is_enabled():
@@ -97,9 +96,7 @@ class Trainer:
             else:
                 self.optimizer.zero_grad(set_to_none=True)
 
-                with torch.cuda.amp.autocast(
-                    enabled=self.config.mixed_precision and torch.cuda.is_available()
-                ):
+                with torch.amp.autocast(device_type="cuda", enabled=amp_enabled):
                     loss, metrics = step_fn(epoch)
 
                 if not torch.isfinite(loss):
