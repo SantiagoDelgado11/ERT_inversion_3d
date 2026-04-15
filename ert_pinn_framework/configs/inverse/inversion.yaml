@@ -1,0 +1,35 @@
+inversion:
+  enabled: true
+  require_forward_checkpoint: true
+  jointly_optimize_potential: true
+
+  conductivity_parameterization: log_conductivity
+  positivity_enforcement: exp
+
+  observations:
+    path: null
+    delimiter: ","
+    skiprows: 0
+    point_columns: [0, 1, 2]
+    value_column: 3
+
+  optimizer:
+    name: adam
+    lr: 0.0005
+    weight_decay: 0.0
+
+  loss_weights:
+    pde: 1.0
+    data: 0.0
+    regularization: 1.0
+
+  regularization:
+    l2_weight: 0.0001
+    tv_weight: 0.0
+
+  checkpoint_every: 100
+  log_every: 20
+
+  bounds:
+    conductivity_min: 0.001
+    conductivity_max: 10.0

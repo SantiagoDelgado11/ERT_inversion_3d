@@ -1,0 +1,23 @@
+dataset:
+  name: synthetic_ert_3d
+  train_split: 0.8
+  val_split: 0.2
+  normalize_inputs: false
+  normalize_targets: false
+
+domain:
+  bounds:
+    x: [-1.0, 1.0]
+    y: [-1.0, 1.0]
+    z: [0.0, 1.0]
+
+sampling:
+  strategy: uniform
+  interior_points_per_epoch: 20000
+  boundary_points_per_face_per_epoch: 2000
+  measurement_points: 512
+  random_seed: 42
+
+noise:
+  add_gaussian_noise: false
+  sigma: 0.0

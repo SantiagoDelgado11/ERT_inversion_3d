@@ -1,0 +1,22 @@
+project:
+  name: ert_pinn_framework
+  seed: 42
+  device: auto
+
+paths:
+  output_root: outputs
+  logs_dir: logs
+  checkpoints_dir: checkpoints
+
+runtime:
+  dtype: float32
+  deterministic: true
+  cudnn_benchmark: false
+
+defaults:
+  data: data/dataset.yaml
+  model: model/pinn.yaml
+  training: training/training.yaml
+  inverse: inverse/inversion.yaml
+  electrodes: electrodes/electrodes.yaml
+  experiment: experiment/exp_default.yaml

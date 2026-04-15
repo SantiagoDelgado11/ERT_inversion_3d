@@ -1,0 +1,11 @@
+model:
+  name: pinn_mlp
+  input_dim: 3
+  output_dim: 1
+  hidden_dim: 128
+  num_hidden_layers: 6
+  activation: tanh
+  use_fourier_features: false
+  fourier_features_dim: 0
+  fourier_sigma: 1.0
+  weight_init: xavier_uniform

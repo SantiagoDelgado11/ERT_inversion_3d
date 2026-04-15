@@ -1,0 +1,25 @@
+training:
+  epochs: 2000
+  batch_size: 4096
+  mixed_precision: false
+  grad_clip_norm: 1.0
+  checkpoint_every: 100
+  log_every: 20
+
+optimizer:
+  name: adam
+  lr: 0.001
+  weight_decay: 0.0
+
+scheduler:
+  enabled: true
+  name: step_lr
+  step_size: 500
+  gamma: 0.5
+
+loss_weights:
+  pde: 1.0
+  dirichlet_bc: 1.0
+  neumann_bc: 1.0
+  data: 1.0
+  regularization: 0.0001

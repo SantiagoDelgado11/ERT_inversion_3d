@@ -1,0 +1,14 @@
+electrodes:
+  count: 16
+  radius: 1.0
+  z: 0.0
+  contact_impedance: 0.0
+  arrangement: circular
+
+  injection_patterns:
+    type: adjacent
+    skip: 0
+
+  measurement_patterns:
+    type: adjacent
+    skip: 1
