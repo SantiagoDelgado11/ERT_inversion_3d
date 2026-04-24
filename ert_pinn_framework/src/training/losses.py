@@ -14,21 +14,29 @@ class LossWeights:
     """Scalar weights for each loss component."""
 
     pde: float = 1.0
+    bc: float = 1.0
     dirichlet_bc: float = 1.0
     neumann_bc: float = 1.0
     data: float = 1.0
     regularization: float = 1e-4
+    flux: float = 1.0
 
     @classmethod
     def from_config(cls, config: dict) -> "LossWeights":
         """Build loss weights from training config section."""
         source = config.get("loss_weights", config)
+
+        dirichlet_bc = float(source.get("dirichlet_bc", 1.0))
+        neumann_bc = float(source.get("neumann_bc", 1.0))
+        bc_default = 0.5 * (dirichlet_bc + neumann_bc)
         return cls(
             pde=float(source.get("pde", 1.0)),
-            dirichlet_bc=float(source.get("dirichlet_bc", 1.0)),
-            neumann_bc=float(source.get("neumann_bc", 1.0)),
+            bc=float(source.get("bc", bc_default)),
+            dirichlet_bc=dirichlet_bc,
+            neumann_bc=neumann_bc,
             data=float(source.get("data", 1.0)),
             regularization=float(source.get("regularization", 1e-4)),
+            flux=float(source.get("flux", 1.0)),
         )
 
 
@@ -44,10 +52,12 @@ class WeightedLossComposer:
 
         weights_map = {
             "pde": self.weights.pde,
+            "bc": self.weights.bc,
             "dirichlet_bc": self.weights.dirichlet_bc,
             "neumann_bc": self.weights.neumann_bc,
             "data": self.weights.data,
             "regularization": self.weights.regularization,
+            "flux": self.weights.flux,
         }
 
         logs: dict[str, float] = {}

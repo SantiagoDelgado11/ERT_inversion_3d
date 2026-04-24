@@ -20,12 +20,28 @@ inversion:
 
   loss_weights:
     pde: 1.0
+    bc: 1.0
     data: 0.0
     regularization: 1.0
+    flux: 1.0
 
   regularization:
-    l2_weight: 0.0001
-    tv_weight: 0.0
+    tv_eps: 1.0e-8
+    l2_weight: 0.0
+
+  source_model:
+    current: 1.0
+    gaussian_epsilon: 0.05
+    flux_control_radius: 0.05
+    flux_surface_points: 256
+    cycle_injection_patterns: false
+    fixed_electrode_pair: [0, 1]
+
+  boundary_conditions:
+    dirichlet_face: z_max
+    dirichlet_value: 0.0
+    neumann_faces: [x_min, x_max, y_min, y_max, z_min]
+    neumann_target_flux: 0.0
 
   checkpoint_every: 100
   log_every: 20
