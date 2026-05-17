@@ -1,11 +1,4 @@
 inversion:
-  enabled: true
-  require_forward_checkpoint: true
-  jointly_optimize_potential: true
-
-  conductivity_parameterization: log_conductivity
-  positivity_enforcement: exp
-
   observations:
     path: null
     delimiter: ","
@@ -14,27 +7,17 @@ inversion:
     value_column: 3
 
   optimizer:
-    name: adam
     lr: 0.0005
     weight_decay: 0.0
 
-  loss_weights:
-    pde: 1.0
-    bc: 1.0
-    data: 0.0
-    regularization: 1.0
-    flux: 1.0
-
   regularization:
     tv_eps: 1.0e-8
-    l2_weight: 0.0
 
   source_model:
     current: 1.0
     gaussian_epsilon: 0.05
     flux_control_radius: 0.05
     flux_surface_points: 256
-    cycle_injection_patterns: false
     fixed_electrode_pair: [0, 1]
 
   boundary_conditions:
@@ -43,9 +26,4 @@ inversion:
     neumann_faces: [x_min, x_max, y_min, y_max, z_min]
     neumann_target_flux: 0.0
 
-  checkpoint_every: 100
   log_every: 20
-
-  bounds:
-    conductivity_min: 0.001
-    conductivity_max: 10.0

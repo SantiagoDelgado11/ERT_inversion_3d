@@ -18,9 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.engine.pipelines import run_inversion_pipeline, run_training_pipeline
-from src.evaluation.metrics import summary_metrics
 from src.experiments.runner import load_project_config
+from src.main import run_minimal_inverse
 from src.utils.io import save_json
 
 
@@ -59,12 +58,6 @@ def parse_args() -> argparse.Namespace:
         help="Gaussian noise std added to synthetic potential observations",
     )
     parser.add_argument(
-        "--data-loss-weight",
-        type=float,
-        default=1.0,
-        help="Weight for inversion data term",
-    )
-    parser.add_argument(
         "--train-epochs",
         type=int,
         default=None,
@@ -82,10 +75,6 @@ def parse_args() -> argparse.Namespace:
         help="Use a faster setup for quick validation",
     )
     return parser.parse_args()
-
-
-def _experiment_section(experiment_cfg: dict) -> dict:
-    return experiment_cfg.get("experiment", experiment_cfg)
 
 
 def _inversion_section(inverse_cfg: dict) -> dict:
@@ -113,9 +102,6 @@ def _apply_runtime_overrides(config: dict, args: argparse.Namespace) -> None:
         inversion["epochs"] = 200
         sampling["interior_points_per_epoch"] = 6000
         sampling["boundary_points_per_face_per_epoch"] = 600
-        training["batch_size"] = 2048
-        training["checkpoint_every"] = 50
-        inversion["checkpoint_every"] = 50
         training["log_every"] = 10
         inversion["log_every"] = 10
 
@@ -128,10 +114,6 @@ def _apply_runtime_overrides(config: dict, args: argparse.Namespace) -> None:
         if measurement_points <= 0:
             raise ValueError("--measurement-points must be > 0")
         sampling["measurement_points"] = measurement_points
-
-    inversion.setdefault("loss_weights", {})["data"] = float(args.data_loss_weight)
-    if args.data_loss_weight > 0.0:
-        inversion["jointly_optimize_potential"] = True
 
 
 def _build_synthetic_observations(
@@ -174,15 +156,6 @@ def _build_synthetic_observations(
     }
 
 
-def _optional_array(npz_data: np.lib.npyio.NpzFile, key: str) -> np.ndarray | None:
-    if key not in npz_data.files:
-        return None
-    value = npz_data[key]
-    if isinstance(value, np.ndarray) and value.dtype == object and value.size == 1 and value.item() is None:
-        return None
-    return np.asarray(value)
-
-
 def _flatten_column(values: np.ndarray) -> np.ndarray:
     arr = np.asarray(values)
     if arr.ndim == 2 and arr.shape[1] == 1:
@@ -209,67 +182,6 @@ def _plot_scatter_panel(
     plt.close(fig)
 
 
-def _plot_potential_comparison(
-    points: np.ndarray,
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    output_path: Path,
-) -> dict[str, float]:
-    y_true_1d = _flatten_column(y_true)
-    y_pred_1d = _flatten_column(y_pred)
-    error = y_pred_1d - y_true_1d
-
-    min_common = float(np.min([y_true_1d.min(), y_pred_1d.min()]))
-    max_common = float(np.max([y_true_1d.max(), y_pred_1d.max()]))
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.6), constrained_layout=True)
-
-    sc0 = axes[0].scatter(
-        points[:, 0],
-        points[:, 1],
-        c=y_true_1d,
-        s=12,
-        cmap="viridis",
-        vmin=min_common,
-        vmax=max_common,
-    )
-    axes[0].set_title("Potencial verdadero")
-    axes[0].set_xlabel("x")
-    axes[0].set_ylabel("y")
-
-    sc1 = axes[1].scatter(
-        points[:, 0],
-        points[:, 1],
-        c=y_pred_1d,
-        s=12,
-        cmap="viridis",
-        vmin=min_common,
-        vmax=max_common,
-    )
-    axes[1].set_title("Potencial predicho")
-    axes[1].set_xlabel("x")
-    axes[1].set_ylabel("y")
-
-    sc2 = axes[2].scatter(
-        points[:, 0],
-        points[:, 1],
-        c=error,
-        s=12,
-        cmap="coolwarm",
-    )
-    axes[2].set_title("Error (pred - true)")
-    axes[2].set_xlabel("x")
-    axes[2].set_ylabel("y")
-
-    fig.colorbar(sc0, ax=axes[0], label="potential")
-    fig.colorbar(sc1, ax=axes[1], label="potential")
-    fig.colorbar(sc2, ax=axes[2], label="error")
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
-
-    return summary_metrics(y_true_1d, y_pred_1d)
-
-
 def _make_plots(output_root: Path) -> dict:
     npz_path = output_root / "inversion_predictions.npz"
     if not npz_path.exists():
@@ -285,73 +197,26 @@ def _make_plots(output_root: Path) -> dict:
         "metrics": {},
     }
 
-    train_points = _optional_array(data, "train_points")
-    train_true = _optional_array(data, "train_potential_true")
-    train_pred = _optional_array(data, "train_potential_pred")
-    train_sigma = _optional_array(data, "train_conductivity_pred")
+    if "points" not in data.files or "conductivity" not in data.files:
+        raise KeyError(f"Unsupported NPZ keys in {npz_path}. Expected points and conductivity, got {data.files}")
 
-    if train_points is not None and train_true is not None and train_pred is not None:
-        potential_fig = plot_dir / "train_potential_comparison_xy.png"
-        potential_metrics = _plot_potential_comparison(
-            points=train_points,
-            y_true=train_true,
-            y_pred=train_pred,
-            output_path=potential_fig,
-        )
-        results["figures"].append(str(potential_fig))
-        results["metrics"]["train_potential"] = potential_metrics
-
-    val_points = _optional_array(data, "val_points")
-    val_true = _optional_array(data, "val_potential_true")
-    val_pred = _optional_array(data, "val_potential_pred")
-    if val_points is not None and val_true is not None and val_pred is not None:
-        val_fig = plot_dir / "val_potential_comparison_xy.png"
-        val_metrics = _plot_potential_comparison(
-            points=val_points,
-            y_true=val_true,
-            y_pred=val_pred,
-            output_path=val_fig,
-        )
-        results["figures"].append(str(val_fig))
-        results["metrics"]["val_potential"] = val_metrics
-
-    if train_points is not None and train_sigma is not None:
-        sigma_1d = _flatten_column(train_sigma)
-        sigma_fig = plot_dir / "train_conductivity_xy.png"
-        _plot_scatter_panel(
-            points=train_points,
-            values=sigma_1d,
-            title="Conductividad invertida (train points)",
-            output_path=sigma_fig,
-            cmap="plasma",
-        )
-        results["figures"].append(str(sigma_fig))
-        results["metrics"]["train_conductivity"] = {
-            "mean": float(np.mean(sigma_1d)),
-            "std": float(np.std(sigma_1d)),
-            "min": float(np.min(sigma_1d)),
-            "max": float(np.max(sigma_1d)),
-        }
-
-    generic_points = _optional_array(data, "points")
-    generic_sigma = _optional_array(data, "conductivity")
-    if generic_points is not None and generic_sigma is not None:
-        sigma_1d = _flatten_column(generic_sigma)
-        sigma_fig = plot_dir / "conductivity_xy.png"
-        _plot_scatter_panel(
-            points=generic_points,
-            values=sigma_1d,
-            title="Conductividad invertida",
-            output_path=sigma_fig,
-            cmap="plasma",
-        )
-        results["figures"].append(str(sigma_fig))
-        results["metrics"]["conductivity"] = {
-            "mean": float(np.mean(sigma_1d)),
-            "std": float(np.std(sigma_1d)),
-            "min": float(np.min(sigma_1d)),
-            "max": float(np.max(sigma_1d)),
-        }
+    points = np.asarray(data["points"], dtype=np.float64)
+    sigma = _flatten_column(np.asarray(data["conductivity"], dtype=np.float64))
+    sigma_fig = plot_dir / "conductivity_xy.png"
+    _plot_scatter_panel(
+        points=points,
+        values=sigma,
+        title="Conductividad invertida",
+        output_path=sigma_fig,
+        cmap="plasma",
+    )
+    results["figures"].append(str(sigma_fig))
+    results["metrics"]["conductivity"] = {
+        "mean": float(np.mean(sigma)),
+        "std": float(np.std(sigma)),
+        "min": float(np.min(sigma)),
+        "max": float(np.max(sigma)),
+    }
 
     metrics_path = plot_dir / "metrics.json"
     save_json(results["metrics"], metrics_path)
@@ -364,18 +229,13 @@ def main() -> None:
 
     config = load_project_config(args.config_dir)
 
-    exp_section = _experiment_section(config["experiment"])
-    exp_section["name"] = args.experiment_name
-    exp_section["save_predictions"] = True
-    exp_section["save_checkpoints"] = True
-
     _apply_runtime_overrides(config, args)
 
     project_root = Path(config["_meta"]["project_root"])
     output_root_rel = str(config["base"].get("paths", {}).get("output_root", "outputs"))
     output_root = project_root / output_root_rel / args.experiment_name
 
-    training_summary = run_training_pipeline(config, output_root=output_root, force_final_checkpoint=True)
+    training_summary = run_minimal_inverse(config=config, output_root=output_root, mode="train")
 
     predictions_path = output_root / "training_predictions.npz"
     if not predictions_path.exists():
@@ -396,7 +256,7 @@ def main() -> None:
     obs_cfg["path"] = _safe_rel_path(observations_path, project_root)
     obs_cfg["skiprows"] = 1
 
-    inversion_summary = run_inversion_pipeline(config, output_root=output_root)
+    inversion_summary = run_minimal_inverse(config=config, output_root=output_root, mode="invert")
     plots_summary = _make_plots(output_root)
 
     full_summary = {

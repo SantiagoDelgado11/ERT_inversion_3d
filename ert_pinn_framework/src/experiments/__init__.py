@@ -1,12 +1,11 @@
-"""Experiment registry and execution helpers."""
+"""Experiment loading and execution helpers."""
 
-from .registry import available_experiments, get_experiment, register_experiment
 from .runner import load_project_config, run_experiment
+from .visual_simulation import create_visualization_suite, run_visual_inversion_simulation
 
 __all__ = [
-    "register_experiment",
-    "get_experiment",
-    "available_experiments",
+    "create_visualization_suite",
     "load_project_config",
     "run_experiment",
+    "run_visual_inversion_simulation",
 ]

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..utils.io import load_yaml
-from .registry import get_experiment
+from ..main import run_minimal_inverse
+from ..utils.io import load_yaml, save_json
 
 
 def load_project_config(config_dir: str | Path) -> dict:
@@ -47,7 +47,7 @@ def run_experiment(
     exp_name = override_name or str(exp_cfg.get("name", "exp_default"))
 
     output_root_rel = str(base_cfg.get("paths", {}).get("output_root", "outputs"))
-    project_root = Path(config_dir).parent
+    project_root = Path(config["_meta"]["project_root"]).resolve()
     output_root = project_root / output_root_rel / exp_name
 
     config["_meta"] = {
@@ -55,5 +55,23 @@ def run_experiment(
         "project_root": str(project_root.resolve()),
     }
 
-    pipeline = get_experiment(mode)
-    return pipeline(config=config, output_root=output_root)
+    normalized_mode = mode.strip().lower()
+    if normalized_mode in {"train", "training"}:
+        return run_minimal_inverse(config=config, output_root=output_root, mode="train")
+
+    if normalized_mode in {"invert", "inversion"}:
+        return run_minimal_inverse(config=config, output_root=output_root, mode="invert")
+
+    if normalized_mode == "train_then_invert":
+        training_summary = run_minimal_inverse(config=config, output_root=output_root, mode="train")
+        inversion_summary = run_minimal_inverse(config=config, output_root=output_root, mode="invert")
+        summary = {
+            "mode": "train_then_invert",
+            "training": training_summary,
+            "inversion": inversion_summary,
+        }
+        save_json(summary, output_root / "experiment_summary.json")
+        return summary
+
+    options = "invert, inversion, train, training, train_then_invert"
+    raise KeyError(f"Unknown experiment mode '{mode}'. Available: {options}")

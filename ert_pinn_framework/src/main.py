@@ -10,6 +10,7 @@ This file intentionally contains the full essential implementation:
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import random
@@ -261,6 +262,140 @@ def _save_json(payload: dict, path: Path) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _save_history(history: list[dict[str, float]], output_root: Path, mode: str) -> dict[str, str | None]:
+    if not history:
+        return {"json": None, "csv": None}
+
+    json_path = output_root / f"{mode}_loss_history.json"
+    _save_json({"history": history}, json_path)
+
+    csv_path = output_root / f"{mode}_loss_history.csv"
+    fieldnames = list(history[0].keys())
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(history)
+
+    return {"json": str(json_path), "csv": str(csv_path)}
+
+
+def _history_summary(history: list[dict[str, float]]) -> dict[str, float]:
+    if not history:
+        return {}
+
+    totals = np.asarray([row["total"] for row in history], dtype=np.float64)
+    first = float(totals[0])
+    final = float(totals[-1])
+    return {
+        "initial_total": first,
+        "final_total": final,
+        "best_total": float(np.min(totals)),
+        "loss_reduction_abs": float(first - final),
+        "loss_reduction_fraction": float((first - final) / (abs(first) + 1e-12)),
+    }
+
+
+def _tensor_stats(tensor: Tensor) -> dict[str, object]:
+    arr = tensor.detach().cpu().to(torch.float64).reshape(-1)
+    if arr.numel() == 0:
+        return {
+            "shape": list(tensor.shape),
+            "numel": 0,
+        }
+
+    return {
+        "shape": list(tensor.shape),
+        "numel": int(arr.numel()),
+        "mean": float(torch.mean(arr).item()),
+        "std": float(torch.std(arr, unbiased=False).item()),
+        "min": float(torch.min(arr).item()),
+        "max": float(torch.max(arr).item()),
+        "l2_norm": float(torch.linalg.vector_norm(arr).item()),
+    }
+
+
+def _module_weight_summary(module: nn.Module) -> dict[str, object]:
+    tensors = module.state_dict()
+    layer_stats = {name: _tensor_stats(tensor) for name, tensor in tensors.items()}
+
+    total_params = int(sum(tensor.numel() for tensor in tensors.values()))
+    trainable_params = int(sum(param.numel() for param in module.parameters() if param.requires_grad))
+    return {
+        "total_tensors": len(tensors),
+        "total_parameters": total_params,
+        "trainable_parameters": trainable_params,
+        "layers": layer_stats,
+    }
+
+
+def _save_weight_artifacts(
+    u_theta: PotentialNet,
+    sigma_phi: ConductivityNet,
+    output_root: Path,
+    mode: str,
+) -> dict[str, str]:
+    weights_dir = output_root / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = {
+        "mode": mode,
+        "potential_network": _module_weight_summary(u_theta),
+        "conductivity_network": _module_weight_summary(sigma_phi),
+    }
+
+    summary_path = weights_dir / f"weights_summary_{mode}.json"
+    _save_json(summary, summary_path)
+
+    arrays = {}
+    for prefix, state in (("u_theta", u_theta.state_dict()), ("sigma_phi", sigma_phi.state_dict())):
+        for name, tensor in state.items():
+            arrays[f"{prefix}.{name}"] = tensor.detach().cpu().numpy()
+
+    npz_path = weights_dir / f"weights_{mode}.npz"
+    np.savez_compressed(npz_path, **arrays)
+
+    return {
+        "summary": str(summary_path),
+        "npz": str(npz_path),
+    }
+
+
+def _find_warm_start_checkpoint(output_root: Path) -> Path | None:
+    checkpoints_dir = output_root / "checkpoints"
+    for filename in ("train_model.pt", "invert_model.pt"):
+        candidate = checkpoints_dir / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _load_model_checkpoint(
+    checkpoint_path: Path,
+    u_theta: PotentialNet,
+    sigma_phi: ConductivityNet,
+    device: torch.device,
+) -> None:
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if "u_theta" not in checkpoint or "sigma_phi" not in checkpoint:
+        raise KeyError(f"Checkpoint {checkpoint_path} is missing model weights")
+
+    u_theta.load_state_dict(checkpoint["u_theta"])
+    sigma_phi.load_state_dict(checkpoint["sigma_phi"])
+
+
+def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    true = np.asarray(y_true, dtype=np.float64).reshape(-1)
+    pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
+    err = pred - true
+    return {
+        "mse": float(np.mean(err**2)),
+        "rmse": float(np.sqrt(np.mean(err**2))),
+        "mae": float(np.mean(np.abs(err))),
+        "relative_l2": float(np.linalg.norm(err) / (np.linalg.norm(true) + 1e-12)),
+    }
+
+
 def compute_losses(
     u_theta: PotentialNet,
     sigma_phi: ConductivityNet,
@@ -346,7 +481,7 @@ def compute_losses(
 
     if x_neu.shape[0] > 0:
         target_flux = torch.as_tensor(neumann_target_flux, device=device, dtype=dtype)
-        normal_flux = torch.sum(sigma_all[s_neu] * grad_u_all[s_neu] * n_neu, dim=1, keepdim=True)
+        normal_flux = -torch.sum(sigma_all[s_neu] * grad_u_all[s_neu] * n_neu, dim=1, keepdim=True)
         loss_neumann = torch.mean((normal_flux - target_flux) ** 2)
     else:
         loss_neumann = torch.zeros((), device=device, dtype=dtype)
@@ -356,8 +491,8 @@ def compute_losses(
     grad_sigma_int = grad_sigma_all[s_int]
     loss_reg = torch.mean(torch.sqrt(torch.sum(grad_sigma_int * grad_sigma_int, dim=1) + tv_eps))
 
-    src_flux = torch.sum(sigma_all[s_src] * grad_u_all[s_src] * n_src, dim=1, keepdim=True)
-    sink_flux = torch.sum(sigma_all[s_sink] * grad_u_all[s_sink] * n_sink, dim=1, keepdim=True)
+    src_flux = -torch.sum(sigma_all[s_src] * grad_u_all[s_src] * n_src, dim=1, keepdim=True)
+    sink_flux = -torch.sum(sigma_all[s_sink] * grad_u_all[s_sink] * n_sink, dim=1, keepdim=True)
 
     control_area = 4.0 * math.pi * (float(flux_radius) ** 2)
     flux_target = torch.as_tensor(float(current) / control_area, device=device, dtype=dtype)
@@ -384,6 +519,9 @@ def compute_losses(
 
 
 def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -> dict:
+    if mode not in {"train", "invert"}:
+        raise ValueError(f"Unsupported mode: {mode}")
+
     base_cfg = config["base"]
     data_cfg = config["data"]
     model_cfg = config["model"].get("model", config["model"])
@@ -431,20 +569,28 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         sigma_floor=float(inverse_cfg.get("sigma_floor", 1e-6)),
     ).to(device=device, dtype=dtype)
 
-    optimizer_cfg = inverse_cfg.get("optimizer", config["training"].get("optimizer", {}))
+    optimizer_cfg = config["training"].get("optimizer", {}) if mode == "train" else inverse_cfg.get("optimizer", {})
     optimizer = torch.optim.Adam(
         list(u_theta.parameters()) + list(sigma_phi.parameters()),
         lr=float(optimizer_cfg.get("lr", 1e-3)),
         weight_decay=float(optimizer_cfg.get("weight_decay", 0.0)),
     )
 
+    warm_start_checkpoint = None
+    if mode == "invert":
+        checkpoint_path = _find_warm_start_checkpoint(output_root)
+        if checkpoint_path is not None:
+            _load_model_checkpoint(checkpoint_path, u_theta, sigma_phi, device)
+            warm_start_checkpoint = str(checkpoint_path)
+
     sampling_cfg = data_cfg.get("sampling", {})
     n_interior = int(sampling_cfg.get("interior_points_per_epoch", 20000))
     n_boundary_face = int(sampling_cfg.get("boundary_points_per_face_per_epoch", 2000))
     n_prediction = int(sampling_cfg.get("measurement_points", 512))
 
-    epochs = int(inverse_cfg.get("epochs", training_cfg.get("epochs", 1000)))
-    log_every = int(inverse_cfg.get("log_every", training_cfg.get("log_every", 20)))
+    run_cfg = training_cfg if mode == "train" else inverse_cfg
+    epochs = int(run_cfg.get("epochs", 1000))
+    log_every = int(run_cfg.get("log_every", 20))
 
     source_cfg = inverse_cfg.get("source_model", {})
     current = float(source_cfg.get("current", 1.0))
@@ -465,7 +611,7 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     if source_idx == sink_idx:
         raise ValueError("source and sink electrodes must be different")
 
-    center_margin = max(gaussian_epsilon, flux_radius)
+    center_margin = max(3.0 * gaussian_epsilon, flux_radius)
     source_center = clamp_center(electrodes[source_idx], bounds, center_margin)
     sink_center = clamp_center(electrodes[sink_idx], bounds, center_margin)
 
@@ -568,15 +714,26 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     checkpoints_dir = output_root / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_path = checkpoints_dir / "minimal_inverse_model.pt"
-    torch.save(
-        {
-            "u_theta": u_theta.state_dict(),
-            "sigma_phi": sigma_phi.state_dict(),
-            "device": str(device),
-            "dtype": str(dtype),
-        },
-        checkpoint_path,
+    checkpoint_payload = {
+        "mode": mode,
+        "u_theta": u_theta.state_dict(),
+        "sigma_phi": sigma_phi.state_dict(),
+        "device": str(device),
+        "dtype": str(dtype),
+        "model_config": dict(model_cfg),
+        "inverse_config": dict(inverse_cfg),
+        "source_electrode": source_idx,
+        "sink_electrode": sink_idx,
+    }
+    checkpoint_path = checkpoints_dir / f"{mode}_model.pt"
+    torch.save(checkpoint_payload, checkpoint_path)
+
+    history_paths = _save_history(history, output_root=output_root, mode=mode)
+    weight_paths = _save_weight_artifacts(
+        u_theta=u_theta,
+        sigma_phi=sigma_phi,
+        output_root=output_root,
+        mode=mode,
     )
 
     pred_points = sample_uniform(bounds, n_prediction, rng, device, dtype)
@@ -590,18 +747,48 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         "conductivity": pred_sigma.detach().cpu().numpy(),
     }
 
-    np.savez(output_root / "inversion_predictions.npz", **prediction_payload)
     if mode == "train":
-        np.savez(output_root / "training_predictions.npz", points=prediction_payload["points"], potential=prediction_payload["potential"])
+        np.savez(
+            output_root / "training_predictions.npz",
+            points=prediction_payload["points"],
+            potential=prediction_payload["potential"],
+        )
+    else:
+        np.savez(output_root / "inversion_predictions.npz", **prediction_payload)
+
+    observation_fit = None
+    if obs_points is not None and obs_values is not None:
+        with torch.no_grad():
+            obs_pred = u_theta(obs_points)
+        obs_true_np = obs_values.detach().cpu().numpy()
+        obs_pred_np = obs_pred.detach().cpu().numpy()
+        obs_points_np = obs_points.detach().cpu().numpy()
+        observation_fit = {
+            "count": int(obs_points.shape[0]),
+            "metrics": _regression_metrics(obs_true_np, obs_pred_np),
+            "predictions": str(output_root / f"{mode}_observation_fit.npz"),
+        }
+        np.savez(
+            output_root / f"{mode}_observation_fit.npz",
+            points=obs_points_np,
+            observed=obs_true_np,
+            predicted=obs_pred_np,
+            residual=obs_pred_np - obs_true_np,
+        )
 
     summary = {
         "mode": mode,
         "epochs": len(history),
         "final_metrics": history[-1] if history else {},
+        "history_summary": _history_summary(history),
+        "loss_history": history_paths,
         "checkpoint": str(checkpoint_path),
+        "weights": weight_paths,
         "observations": None if obs_path is None else str(obs_path),
+        "observation_fit": observation_fit,
         "source_electrode": source_idx,
         "sink_electrode": sink_idx,
+        "warm_start_checkpoint": warm_start_checkpoint,
     }
 
     summary_name = "training_summary.json" if mode == "train" else "inversion_summary.json"
