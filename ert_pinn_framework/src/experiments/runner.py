@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from ..main import run_minimal_inverse
 from ..utils.io import load_yaml, save_json
@@ -36,9 +37,16 @@ def run_experiment(
     config_dir: str | Path,
     override_mode: str | None = None,
     override_name: str | None = None,
+    observation_overrides: dict[str, Any] | None = None,
 ) -> dict:
     """Run selected experiment mode and return summary dictionary."""
     config = load_project_config(config_dir)
+
+    if observation_overrides:
+        observation_cfg = config["inverse"].setdefault("observations", {})
+        for key, value in observation_overrides.items():
+            if value is not None:
+                observation_cfg[key] = value
 
     base_cfg = config["base"]
     exp_cfg = config["experiment"].get("experiment", config["experiment"])

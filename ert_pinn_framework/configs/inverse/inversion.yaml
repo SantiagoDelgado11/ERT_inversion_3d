@@ -1,10 +1,22 @@
 inversion:
   observations:
     path: null
+    format: auto
     delimiter: ","
     skiprows: 0
+    comment_prefix: "#"
+    has_header: false
     point_columns: [0, 1, 2]
     value_column: 3
+    point_column_names: null
+    value_column_name: null
+    coordinate_scale: null
+    coordinate_offset: null
+    value_scale: 1.0
+    value_offset: 0.0
+    npz_point_key: points
+    npz_value_key: potential
+    drop_invalid_rows: false
 
   optimizer:
     lr: 0.0005

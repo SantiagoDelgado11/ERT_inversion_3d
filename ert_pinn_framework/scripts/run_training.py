@@ -29,15 +29,89 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional experiment name override",
     )
+    parser.add_argument(
+        "--observations-path",
+        type=str,
+        default=None,
+        help="Path to a real observation CSV or NPZ file",
+    )
+    parser.add_argument(
+        "--observations-format",
+        type=str,
+        default=None,
+        choices=["auto", "csv", "npz"],
+        help="Override the observation file format",
+    )
+    parser.add_argument(
+        "--observations-delimiter",
+        type=str,
+        default=None,
+        help="Delimiter used by the observation file",
+    )
+    parser.add_argument(
+        "--observations-skiprows",
+        type=int,
+        default=None,
+        help="Number of initial rows to skip in the observation file",
+    )
+    parser.add_argument(
+        "--observations-has-header",
+        action="store_true",
+        help="Treat the observation table as header-based",
+    )
+    parser.add_argument(
+        "--observations-point-columns",
+        type=int,
+        nargs=3,
+        default=None,
+        help="Positional columns for the x, y and z coordinates",
+    )
+    parser.add_argument(
+        "--observations-value-column",
+        type=int,
+        default=None,
+        help="Positional column for the observed value",
+    )
+    parser.add_argument(
+        "--observations-point-names",
+        type=str,
+        nargs=3,
+        default=None,
+        help="Named columns for the x, y and z coordinates",
+    )
+    parser.add_argument(
+        "--observations-value-name",
+        type=str,
+        default=None,
+        help="Named column for the observed value",
+    )
+    parser.add_argument(
+        "--observations-drop-invalid-rows",
+        action="store_true",
+        help="Skip rows with non-numeric or incomplete observation values",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    observation_overrides = {
+        "path": args.observations_path,
+        "format": args.observations_format,
+        "delimiter": args.observations_delimiter,
+        "skiprows": args.observations_skiprows,
+        "has_header": True if args.observations_has_header else None,
+        "point_columns": args.observations_point_columns,
+        "value_column": args.observations_value_column,
+        "point_column_names": args.observations_point_names,
+        "value_column_name": args.observations_value_name,
+        "drop_invalid_rows": True if args.observations_drop_invalid_rows else None,
+    }
     summary = run_experiment(
         config_dir=args.config_dir,
         override_mode="train",
         override_name=args.experiment_name,
+        observation_overrides=observation_overrides,
     )
     print(json.dumps(summary, indent=2))
 

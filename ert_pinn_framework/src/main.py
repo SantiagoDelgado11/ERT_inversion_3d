@@ -20,6 +20,8 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
+from src.data.observations import load_observation_arrays
+
 
 FACE_SPECS: dict[str, tuple[int, float]] = {
     "x_min": (0, -1.0),
@@ -29,6 +31,12 @@ FACE_SPECS: dict[str, tuple[int, float]] = {
     "z_min": (2, -1.0),
     "z_max": (2, 1.0),
 }
+
+
+def _string_or_default(value: object, default: str) -> str:
+    if value in (None, "", "null"):
+        return default
+    return str(value)
 
 
 class MLP(nn.Module):
@@ -236,6 +244,18 @@ def load_observations(
     value_column: int,
     device: torch.device,
     dtype: torch.dtype,
+    format: str = "auto",
+    has_header: bool = False,
+    comment_prefix: str | None = "#",
+    point_column_names: list[str] | None = None,
+    value_column_name: str | None = None,
+    coordinate_scale: list[float] | float | None = None,
+    coordinate_offset: list[float] | float | None = None,
+    value_scale: float = 1.0,
+    value_offset: float = 0.0,
+    npz_point_key: str = "points",
+    npz_value_key: str = "potential",
+    drop_invalid_rows: bool = False,
 ) -> tuple[Tensor | None, Tensor | None]:
     if path is None:
         return None, None
@@ -243,13 +263,28 @@ def load_observations(
     if len(point_columns) != 3:
         raise ValueError("point_columns must contain exactly 3 indices")
 
-    table = np.loadtxt(path, delimiter=delimiter, skiprows=skiprows, comments="#")
-    table = np.atleast_2d(np.asarray(table, dtype=np.float64))
-    if table.shape[1] < 4:
-        raise ValueError("Observation file must have at least 4 columns: x,y,z,u")
+    points_np, values_np, _ = load_observation_arrays(
+        path,
+        format=format,
+        delimiter=delimiter,
+        skiprows=skiprows,
+        comment_prefix=comment_prefix,
+        has_header=has_header,
+        point_columns=point_columns,
+        value_column=value_column,
+        point_column_names=point_column_names,
+        value_column_name=value_column_name,
+        coordinate_scale=coordinate_scale,
+        coordinate_offset=coordinate_offset,
+        value_scale=value_scale,
+        value_offset=value_offset,
+        npz_point_key=npz_point_key,
+        npz_value_key=npz_value_key,
+        drop_invalid_rows=drop_invalid_rows,
+    )
 
-    points = torch.tensor(table[:, point_columns], device=device, dtype=dtype)
-    values = torch.tensor(table[:, value_column : value_column + 1], device=device, dtype=dtype)
+    points = torch.tensor(points_np, device=device, dtype=dtype)
+    values = torch.tensor(values_np, device=device, dtype=dtype)
     return points, values
 
 
@@ -640,10 +675,24 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     if obs_path is not None and not obs_path.is_absolute():
         obs_path = project_root / obs_path
 
-    obs_delimiter = str(obs_cfg.get("delimiter", ","))
+    obs_delimiter = _string_or_default(obs_cfg.get("delimiter", ","), ",")
     obs_skiprows = int(obs_cfg.get("skiprows", 0))
+    obs_format = _string_or_default(obs_cfg.get("format", "auto"), "auto")
+    obs_has_header = bool(obs_cfg.get("has_header", False))
+    obs_comment_prefix = obs_cfg.get("comment_prefix", "#")
     obs_point_columns = [int(i) for i in obs_cfg.get("point_columns", [0, 1, 2])]
     obs_value_column = int(obs_cfg.get("value_column", 3))
+    obs_point_column_names = obs_cfg.get("point_column_names")
+    if isinstance(obs_point_column_names, tuple):
+        obs_point_column_names = list(obs_point_column_names)
+    obs_value_column_name = obs_cfg.get("value_column_name")
+    obs_coordinate_scale = obs_cfg.get("coordinate_scale")
+    obs_coordinate_offset = obs_cfg.get("coordinate_offset")
+    obs_value_scale = float(obs_cfg.get("value_scale", 1.0))
+    obs_value_offset = float(obs_cfg.get("value_offset", 0.0))
+    obs_npz_point_key = _string_or_default(obs_cfg.get("npz_point_key", "points"), "points")
+    obs_npz_value_key = _string_or_default(obs_cfg.get("npz_value_key", "potential"), "potential")
+    obs_drop_invalid_rows = bool(obs_cfg.get("drop_invalid_rows", False))
 
     obs_points, obs_values = load_observations(
         path=obs_path,
@@ -653,6 +702,18 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         value_column=obs_value_column,
         device=device,
         dtype=dtype,
+        format=obs_format,
+        has_header=obs_has_header,
+        comment_prefix=obs_comment_prefix,
+        point_column_names=obs_point_column_names,
+        value_column_name=obs_value_column_name,
+        coordinate_scale=obs_coordinate_scale,
+        coordinate_offset=obs_coordinate_offset,
+        value_scale=obs_value_scale,
+        value_offset=obs_value_offset,
+        npz_point_key=obs_npz_point_key,
+        npz_value_key=obs_npz_value_key,
+        drop_invalid_rows=obs_drop_invalid_rows,
     )
 
     rng = np.random.default_rng(seed)
