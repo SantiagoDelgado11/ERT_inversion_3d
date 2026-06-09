@@ -2,7 +2,8 @@
 
 The project consumes point-wise observations for the inverse PINN. This module
 adds support for real datasets stored as CSV/TSV/text tables or NPZ archives,
-with either positional columns or named columns.
+with either positional columns or named columns. For text tables, a standard
+CSV header row is detected automatically when present.
 """
 
 from __future__ import annotations
@@ -46,6 +47,44 @@ def _pick_column_index(fieldnames: list[str], column_name: str) -> int:
     except ValueError as exc:
         available = ", ".join(fieldnames)
         raise KeyError(f"Column '{column_name}' was not found. Available columns: {available}") from exc
+
+
+def _is_numeric_token(token: str) -> bool:
+    try:
+        float(token)
+    except ValueError:
+        return False
+    return True
+
+
+def _infer_text_table_header_mode(
+    path: Path,
+    *,
+    delimiter: str,
+    skiprows: int,
+    comment_prefix: str | None,
+) -> bool:
+    with path.open("r", encoding="utf-8") as file_handle:
+        for line in file_handle.readlines()[skiprows:]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if comment_prefix and stripped.startswith(comment_prefix):
+                continue
+
+            reader = csv.reader([line], delimiter=delimiter)
+            try:
+                cells = [cell.strip() for cell in next(reader)]
+            except StopIteration:
+                continue
+
+            meaningful_cells = [cell for cell in cells if cell]
+            if not meaningful_cells:
+                continue
+
+            return not all(_is_numeric_token(cell) for cell in meaningful_cells)
+
+    raise ValueError(f"Observation file is empty after filtering comments and skipped rows: {path}")
 
 
 def _load_text_table_with_header(
@@ -251,6 +290,7 @@ def load_observation_arrays(
 
     The loader accepts either a CSV-like text table or an NPZ archive. For text
     files, observations can be selected by positional columns or by column names.
+    CSV headers are inferred automatically when the first data row is textual.
     """
 
     file_path = Path(path)
@@ -268,6 +308,14 @@ def load_observation_arrays(
         )
 
     use_header = bool(has_header or point_column_names is not None or value_column_name is not None)
+    if not use_header:
+        use_header = _infer_text_table_header_mode(
+            file_path,
+            delimiter=delimiter,
+            skiprows=skiprows,
+            comment_prefix=comment_prefix,
+        )
+
     if use_header:
         points, values, metadata = _load_text_table_with_header(
             file_path,

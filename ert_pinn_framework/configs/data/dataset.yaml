@@ -7,4 +7,6 @@ domain:
 sampling:
   interior_points_per_epoch: 20000
   boundary_points_per_face_per_epoch: 2000
+  flux_source_points: 256
+  flux_sink_points: 256
   measurement_points: 512

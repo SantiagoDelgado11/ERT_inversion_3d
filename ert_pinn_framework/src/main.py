@@ -4,7 +4,7 @@ This file intentionally contains the full essential implementation:
 - model definitions (u_theta, sigma_phi)
 - autograd operators (grad, div)
 - Gaussian dipole source
-- full loss block (data + PDE + BC + TV + flux)
+- weighted loss block (data + PDE + BC + TV + flux)
 - training loop
 """
 
@@ -436,7 +436,10 @@ def compute_losses(
     sigma_phi: ConductivityNet,
     bounds: dict[str, tuple[float, float]],
     n_interior: int,
-    n_boundary_face: int,
+    n_dirichlet: int,
+    n_neumann_per_face: int,
+    n_flux_source: int,
+    n_flux_sink: int,
     dirichlet_face: str,
     dirichlet_value: float,
     neumann_faces: list[str],
@@ -446,8 +449,12 @@ def compute_losses(
     current: float,
     gaussian_epsilon: float,
     flux_radius: float,
-    flux_surface_points: int,
     tv_eps: float,
+    w_data: float,
+    w_pde: float,
+    w_bc: float,
+    w_reg: float,
+    w_flux: float,
     obs_points: Tensor | None,
     obs_values: Tensor | None,
     rng: np.random.Generator,
@@ -455,13 +462,13 @@ def compute_losses(
     dtype: torch.dtype,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     x_int = sample_uniform(bounds, n_interior, rng, device, dtype)
-    x_dir, _ = sample_face(bounds, dirichlet_face, n_boundary_face, rng, device, dtype)
+    x_dir, _ = sample_face(bounds, dirichlet_face, n_dirichlet, rng, device, dtype)
 
     if neumann_faces:
         x_neu_list: list[Tensor] = []
         n_neu_list: list[Tensor] = []
         for face in neumann_faces:
-            face_points, face_normals = sample_face(bounds, face, n_boundary_face, rng, device, dtype)
+            face_points, face_normals = sample_face(bounds, face, n_neumann_per_face, rng, device, dtype)
             x_neu_list.append(face_points)
             n_neu_list.append(face_normals)
         x_neu = torch.cat(x_neu_list, dim=0)
@@ -470,8 +477,8 @@ def compute_losses(
         x_neu = torch.zeros((0, 3), device=device, dtype=dtype)
         n_neu = torch.zeros((0, 3), device=device, dtype=dtype)
 
-    x_src, n_src = sample_sphere(source_center, flux_radius, flux_surface_points, rng, device, dtype)
-    x_sink, n_sink = sample_sphere(sink_center, flux_radius, flux_surface_points, rng, device, dtype)
+    x_src, n_src = sample_sphere(source_center, flux_radius, n_flux_source, rng, device, dtype)
+    x_sink, n_sink = sample_sphere(sink_center, flux_radius, n_flux_sink, rng, device, dtype)
 
     n_data = 0 if obs_points is None else int(obs_points.shape[0])
     all_blocks = [x_int, x_dir, x_neu, x_src, x_sink]
@@ -538,7 +545,13 @@ def compute_losses(
     else:
         loss_data = torch.mean((u_all[s_data] - obs_values) ** 2)
 
-    loss_total = loss_data + loss_pde + loss_bc + loss_reg + loss_flux
+    loss_total = (
+        float(w_data) * loss_data
+        + float(w_pde) * loss_pde
+        + float(w_bc) * loss_bc
+        + float(w_reg) * loss_reg
+        + float(w_flux) * loss_flux
+    )
 
     return loss_total, {
         "data": loss_data,
@@ -620,18 +633,29 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
 
     sampling_cfg = data_cfg.get("sampling", {})
     n_interior = int(sampling_cfg.get("interior_points_per_epoch", 20000))
-    n_boundary_face = int(sampling_cfg.get("boundary_points_per_face_per_epoch", 2000))
+    n_dirichlet = int(sampling_cfg.get("dirichlet_points_per_epoch", sampling_cfg.get("boundary_points_per_face_per_epoch", 2000)))
+    n_neumann_per_face = int(sampling_cfg.get("neumann_points_per_face_per_epoch", sampling_cfg.get("boundary_points_per_face_per_epoch", 2000)))
     n_prediction = int(sampling_cfg.get("measurement_points", 512))
 
     run_cfg = training_cfg if mode == "train" else inverse_cfg
     epochs = int(run_cfg.get("epochs", 1000))
     log_every = int(run_cfg.get("log_every", 20))
+    loss_weights_cfg = run_cfg.get("loss_weights", {}) if isinstance(run_cfg.get("loss_weights", {}), dict) else {}
+    loss_weights = {
+        "data": float(loss_weights_cfg.get("data", 1.0)),
+        "pde": float(loss_weights_cfg.get("pde", 1.0)),
+        "bc": float(loss_weights_cfg.get("bc", 1.0)),
+        "reg": float(loss_weights_cfg.get("reg", 1.0)),
+        "flux": float(loss_weights_cfg.get("flux", 1.0)),
+    }
 
     source_cfg = inverse_cfg.get("source_model", {})
     current = float(source_cfg.get("current", 1.0))
     gaussian_epsilon = float(source_cfg.get("gaussian_epsilon", 0.05))
     flux_radius = float(source_cfg.get("flux_control_radius", gaussian_epsilon))
     flux_surface_points = int(source_cfg.get("flux_surface_points", 256))
+    n_flux_source = int(sampling_cfg.get("flux_source_points", flux_surface_points))
+    n_flux_sink = int(sampling_cfg.get("flux_sink_points", flux_surface_points))
 
     electrode_count = int(electrodes_cfg.get("count", 16))
     electrode_radius = float(electrodes_cfg.get("radius", 1.0))
@@ -727,7 +751,10 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             sigma_phi=sigma_phi,
             bounds=bounds,
             n_interior=n_interior,
-            n_boundary_face=n_boundary_face,
+            n_dirichlet=n_dirichlet,
+            n_neumann_per_face=n_neumann_per_face,
+            n_flux_source=n_flux_source,
+            n_flux_sink=n_flux_sink,
             dirichlet_face=dirichlet_face,
             dirichlet_value=dirichlet_value,
             neumann_faces=neumann_faces,
@@ -737,8 +764,12 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             current=current,
             gaussian_epsilon=gaussian_epsilon,
             flux_radius=flux_radius,
-            flux_surface_points=flux_surface_points,
             tv_eps=tv_eps,
+            w_data=loss_weights["data"],
+            w_pde=loss_weights["pde"],
+            w_bc=loss_weights["bc"],
+            w_reg=loss_weights["reg"],
+            w_flux=loss_weights["flux"],
             obs_points=obs_points,
             obs_values=obs_values,
             rng=rng,
@@ -783,6 +814,7 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         "dtype": str(dtype),
         "model_config": dict(model_cfg),
         "inverse_config": dict(inverse_cfg),
+        "loss_weights": loss_weights,
         "source_electrode": source_idx,
         "sink_electrode": sink_idx,
     }
@@ -845,6 +877,7 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         "loss_history": history_paths,
         "checkpoint": str(checkpoint_path),
         "weights": weight_paths,
+        "loss_weights": loss_weights,
         "observations": None if obs_path is None else str(obs_path),
         "observation_fit": observation_fit,
         "source_electrode": source_idx,

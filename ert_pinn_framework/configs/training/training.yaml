@@ -1,6 +1,12 @@
 training:
   epochs: 2000
   log_every: 20
+  loss_weights:
+    data: 1.0
+    pde: 1.0
+    bc: 1.0
+    reg: 1.0
+    flux: 1.0
 
 optimizer:
   lr: 0.001
