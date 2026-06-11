@@ -1,4 +1,11 @@
 inversion:
+  conductivity:
+    input_dim: 3
+    hidden_dim: 128
+    num_hidden_layers: 3
+    activation: tanh
+    sigma_floor: 1.0e-6
+
   observations:
     path: null
     format: auto

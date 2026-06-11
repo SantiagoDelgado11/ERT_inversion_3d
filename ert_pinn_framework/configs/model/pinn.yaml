@@ -1,5 +1,6 @@
 model:
-  input_dim: 3
-  hidden_dim: 128
-  num_hidden_layers: 6
-  activation: tanh
+  potential:
+    input_dim: 3
+    hidden_dim: 128
+    num_hidden_layers: 6
+    activation: tanh

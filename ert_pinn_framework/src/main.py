@@ -574,6 +574,8 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     data_cfg = config["data"]
     model_cfg = config["model"].get("model", config["model"])
     inverse_cfg = config["inverse"].get("inversion", config["inverse"])
+    potential_cfg = model_cfg.get("potential", model_cfg)
+    conductivity_cfg = inverse_cfg.get("conductivity", inverse_cfg)
     training_cfg = config["training"].get("training", config["training"])
     electrodes_cfg = config["electrodes"].get("electrodes", config["electrodes"])
 
@@ -603,18 +605,18 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     }
 
     u_theta = PotentialNet(
-        input_dim=int(model_cfg.get("input_dim", 3)),
-        hidden_dim=int(model_cfg.get("hidden_dim", 128)),
-        hidden_layers=int(model_cfg.get("num_hidden_layers", 6)),
-        activation=str(model_cfg.get("activation", "tanh")),
+        input_dim=int(potential_cfg.get("input_dim", 3)),
+        hidden_dim=int(potential_cfg.get("hidden_dim", 128)),
+        hidden_layers=int(potential_cfg.get("num_hidden_layers", 6)),
+        activation=str(potential_cfg.get("activation", "tanh")),
     ).to(device=device, dtype=dtype)
 
     sigma_phi = ConductivityNet(
-        input_dim=3,
-        hidden_dim=int(inverse_cfg.get("hidden_dim", model_cfg.get("hidden_dim", 128))),
-        hidden_layers=int(inverse_cfg.get("num_hidden_layers", model_cfg.get("num_hidden_layers", 3))),
-        activation=str(inverse_cfg.get("activation", model_cfg.get("activation", "tanh"))),
-        sigma_floor=float(inverse_cfg.get("sigma_floor", 1e-6)),
+        input_dim=int(conductivity_cfg.get("input_dim", 3)),
+        hidden_dim=int(conductivity_cfg.get("hidden_dim", 128)),
+        hidden_layers=int(conductivity_cfg.get("num_hidden_layers", 3)),
+        activation=str(conductivity_cfg.get("activation", "tanh")),
+        sigma_floor=float(conductivity_cfg.get("sigma_floor", 1e-6)),
     ).to(device=device, dtype=dtype)
 
     optimizer_cfg = config["training"].get("optimizer", {}) if mode == "train" else inverse_cfg.get("optimizer", {})

@@ -24,8 +24,9 @@ def main() -> None:
     output_root = PROJECT_ROOT / "outputs" / exp_name
 
     model_cfg = config["model"].get("model", config["model"])
-    model_cfg["hidden_dim"] = 32
-    model_cfg["num_hidden_layers"] = 2
+    potential_cfg = model_cfg.get("potential", model_cfg)
+    potential_cfg["hidden_dim"] = 32
+    potential_cfg["num_hidden_layers"] = 2
 
     sampling = config["data"].setdefault("sampling", {})
     sampling["interior_points_per_epoch"] = 256
@@ -37,6 +38,9 @@ def main() -> None:
     training["log_every"] = 1
 
     inversion = config["inverse"].setdefault("inversion", {})
+    conductivity_cfg = inversion.get("conductivity", inversion)
+    conductivity_cfg["hidden_dim"] = 32
+    conductivity_cfg["num_hidden_layers"] = 2
     inversion["epochs"] = 5
     inversion["log_every"] = 1
     inversion_obs = inversion.setdefault("observations", {})

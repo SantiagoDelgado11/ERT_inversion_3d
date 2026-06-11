@@ -87,13 +87,15 @@ def _apply_visual_preset(config: dict[str, Any], preset: str) -> None:
     training_cfg = _section(config["training"], "training")
     inverse_cfg = _section(config["inverse"], "inversion")
     sampling_cfg = config["data"].setdefault("sampling", {})
+    potential_cfg = _section(model_cfg, "potential")
+    conductivity_cfg = _section(inverse_cfg, "conductivity")
 
     normalized = preset.strip().lower()
     if normalized == "tiny":
-        model_cfg["hidden_dim"] = 32
-        model_cfg["num_hidden_layers"] = 2
-        inverse_cfg["hidden_dim"] = 32
-        inverse_cfg["num_hidden_layers"] = 2
+        potential_cfg["hidden_dim"] = 32
+        potential_cfg["num_hidden_layers"] = 2
+        conductivity_cfg["hidden_dim"] = 32
+        conductivity_cfg["num_hidden_layers"] = 2
         sampling_cfg["interior_points_per_epoch"] = 256
         sampling_cfg["boundary_points_per_face_per_epoch"] = 64
         sampling_cfg["measurement_points"] = 1500
@@ -104,10 +106,10 @@ def _apply_visual_preset(config: dict[str, Any], preset: str) -> None:
         return
 
     if normalized == "quick":
-        model_cfg["hidden_dim"] = 64
-        model_cfg["num_hidden_layers"] = 3
-        inverse_cfg["hidden_dim"] = 64
-        inverse_cfg["num_hidden_layers"] = 3
+        potential_cfg["hidden_dim"] = 64
+        potential_cfg["num_hidden_layers"] = 3
+        conductivity_cfg["hidden_dim"] = 64
+        conductivity_cfg["num_hidden_layers"] = 3
         sampling_cfg["interior_points_per_epoch"] = 4000
         sampling_cfg["boundary_points_per_face_per_epoch"] = 400
         sampling_cfg["measurement_points"] = 4000
