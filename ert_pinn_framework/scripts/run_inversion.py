@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.experiments.cli_overrides import add_pinn_runtime_args, build_pinn_runtime_overrides
 from src.experiments.runner import run_experiment
 
 
@@ -31,6 +32,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--observations-path",
+        "--input-data",
+        dest="observations_path",
         type=str,
         default=None,
         help="Path to a real observation CSV or NPZ file",
@@ -90,6 +93,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip rows with non-numeric or incomplete observation values",
     )
+    add_pinn_runtime_args(parser, include_warm_start=True)
     return parser.parse_args()
 
 
@@ -112,6 +116,7 @@ def main() -> None:
         override_mode="invert",
         override_name=args.experiment_name,
         observation_overrides=observation_overrides,
+        runtime_overrides=build_pinn_runtime_overrides(args, mode="invert"),
     )
     print(json.dumps(summary, indent=2))
 

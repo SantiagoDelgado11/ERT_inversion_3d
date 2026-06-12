@@ -9,6 +9,14 @@ from ..main import run_minimal_inverse
 from ..utils.io import load_yaml, save_json
 
 
+def _deep_update(target: dict[str, Any], updates: dict[str, Any]) -> None:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_update(target[key], value)
+        else:
+            target[key] = value
+
+
 def load_project_config(config_dir: str | Path) -> dict:
     """Load base config and all referenced default sections."""
     cfg_dir = Path(config_dir).resolve()
@@ -38,12 +46,20 @@ def run_experiment(
     override_mode: str | None = None,
     override_name: str | None = None,
     observation_overrides: dict[str, Any] | None = None,
+    runtime_overrides: dict[str, Any] | None = None,
 ) -> dict:
     """Run selected experiment mode and return summary dictionary."""
     config = load_project_config(config_dir)
 
+    if runtime_overrides:
+        _deep_update(config, runtime_overrides)
+
     if observation_overrides:
-        observation_cfg = config["inverse"].setdefault("observations", {})
+        inverse_root = config["inverse"]
+        if isinstance(inverse_root.get("inversion"), dict):
+            observation_cfg = inverse_root["inversion"].setdefault("observations", {})
+        else:
+            observation_cfg = inverse_root.setdefault("observations", {})
         for key, value in observation_overrides.items():
             if value is not None:
                 observation_cfg[key] = value

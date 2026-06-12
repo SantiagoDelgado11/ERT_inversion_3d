@@ -1,7 +1,7 @@
 """Minimal inverse PINN with modified PDE and flux conservation.
 
 This file intentionally contains the full essential implementation:
-- model definitions (u_theta, sigma_phi)
+- PINN assembly (u_theta, sigma_phi)
 - autograd operators (grad, div)
 - Gaussian dipole source
 - weighted loss block (data + PDE + BC + TV + flux)
@@ -11,7 +11,6 @@ This file intentionally contains the full essential implementation:
 from __future__ import annotations
 
 import csv
-import json
 import math
 import random
 from pathlib import Path
@@ -21,6 +20,9 @@ import torch
 from torch import Tensor, nn
 
 from src.data.observations import load_observation_arrays
+from src.models.pinn.electric_potential_network import PotentialNet
+from src.models.pinn.electrical_conductivity_network import ConductivityNet
+from src.utils.io import save_json
 
 
 FACE_SPECS: dict[str, tuple[int, float]] = {
@@ -37,81 +39,6 @@ def _string_or_default(value: object, default: str) -> str:
     if value in (None, "", "null"):
         return default
     return str(value)
-
-
-class MLP(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        output_dim: int,
-        hidden_dim: int,
-        hidden_layers: int,
-        activation: str,
-    ):
-        super().__init__()
-        act_name = activation.lower()
-        if act_name == "tanh":
-            act = nn.Tanh
-        elif act_name == "relu":
-            act = nn.ReLU
-        elif act_name == "silu":
-            act = nn.SiLU
-        elif act_name == "gelu":
-            act = nn.GELU
-        else:
-            raise ValueError(f"Unsupported activation: {activation}")
-
-        layers: list[nn.Module] = [nn.Linear(input_dim, hidden_dim), act()]
-        for _ in range(max(0, hidden_layers - 1)):
-            layers += [nn.Linear(hidden_dim, hidden_dim), act()]
-        layers.append(nn.Linear(hidden_dim, output_dim))
-        self.net = nn.Sequential(*layers)
-
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.net(x)
-
-
-class PotentialNet(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, hidden_layers: int, activation: str):
-        super().__init__()
-        self.model = MLP(
-            input_dim=input_dim,
-            output_dim=1,
-            hidden_dim=hidden_dim,
-            hidden_layers=hidden_layers,
-            activation=activation,
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.model(x)
-
-
-class ConductivityNet(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int,
-        hidden_layers: int,
-        activation: str,
-        sigma_floor: float = 1e-6,
-    ):
-        super().__init__()
-        self.sigma_floor = float(sigma_floor)
-        self.model = MLP(
-            input_dim=input_dim,
-            output_dim=1,
-            hidden_dim=hidden_dim,
-            hidden_layers=hidden_layers,
-            activation=activation,
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        return torch.nn.functional.softplus(self.model(x)) + self.sigma_floor
 
 
 def gradient(scalar: Tensor, inputs: Tensor) -> Tensor:
@@ -292,17 +219,12 @@ def _scalar(value: Tensor) -> float:
     return float(value.detach().cpu().item())
 
 
-def _save_json(payload: dict, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
 def _save_history(history: list[dict[str, float]], output_root: Path, mode: str) -> dict[str, str | None]:
     if not history:
         return {"json": None, "csv": None}
 
     json_path = output_root / f"{mode}_loss_history.json"
-    _save_json({"history": history}, json_path)
+    save_json({"history": history}, json_path)
 
     csv_path = output_root / f"{mode}_loss_history.csv"
     fieldnames = list(history[0].keys())
@@ -380,7 +302,7 @@ def _save_weight_artifacts(
     }
 
     summary_path = weights_dir / f"weights_summary_{mode}.json"
-    _save_json(summary, summary_path)
+    save_json(summary, summary_path)
 
     arrays = {}
     for prefix, state in (("u_theta", u_theta.state_dict()), ("sigma_phi", sigma_phi.state_dict())):
@@ -603,6 +525,7 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         "y": tuple(data_cfg["domain"]["bounds"]["y"]),
         "z": tuple(data_cfg["domain"]["bounds"]["z"]),
     }
+    project_root = Path(config.get("_meta", {}).get("project_root", Path(output_root).resolve().parent.parent))
 
     u_theta = PotentialNet(
         input_dim=int(potential_cfg.get("input_dim", 3)),
@@ -628,7 +551,12 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
 
     warm_start_checkpoint = None
     if mode == "invert":
-        checkpoint_path = _find_warm_start_checkpoint(output_root)
+        checkpoint_raw = inverse_cfg.get("warm_start_checkpoint")
+        checkpoint_path = None if checkpoint_raw in (None, "", "null") else Path(str(checkpoint_raw))
+        if checkpoint_path is not None and not checkpoint_path.is_absolute():
+            checkpoint_path = project_root / checkpoint_path
+        if checkpoint_path is None:
+            checkpoint_path = _find_warm_start_checkpoint(output_root)
         if checkpoint_path is not None:
             _load_model_checkpoint(checkpoint_path, u_theta, sigma_phi, device)
             warm_start_checkpoint = str(checkpoint_path)
@@ -694,7 +622,6 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
 
     tv_eps = float(inverse_cfg.get("regularization", {}).get("tv_eps", 1e-8))
 
-    project_root = Path(config.get("_meta", {}).get("project_root", Path(output_root).resolve().parent.parent))
     obs_cfg = inverse_cfg.get("observations", {})
     obs_raw = obs_cfg.get("path")
     obs_path = None if obs_raw in (None, "", "null") else Path(str(obs_raw))
@@ -834,12 +761,10 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     pred_points = sample_uniform(bounds, n_prediction, rng, device, dtype)
     with torch.no_grad():
         pred_u = u_theta(pred_points)
-        pred_sigma = sigma_phi(pred_points)
 
     prediction_payload = {
         "points": pred_points.detach().cpu().numpy(),
         "potential": pred_u.detach().cpu().numpy(),
-        "conductivity": pred_sigma.detach().cpu().numpy(),
     }
 
     if mode == "train":
@@ -849,6 +774,9 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             potential=prediction_payload["potential"],
         )
     else:
+        with torch.no_grad():
+            pred_sigma = sigma_phi(pred_points)
+        prediction_payload["conductivity"] = pred_sigma.detach().cpu().numpy()
         np.savez(output_root / "inversion_predictions.npz", **prediction_payload)
 
     observation_fit = None
@@ -888,5 +816,5 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     }
 
     summary_name = "training_summary.json" if mode == "train" else "inversion_summary.json"
-    _save_json(summary, output_root / summary_name)
+    save_json(summary, output_root / summary_name)
     return summary
