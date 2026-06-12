@@ -383,8 +383,31 @@ def compute_losses(
     device: torch.device,
     dtype: torch.dtype,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    x_int = sample_uniform(bounds, n_interior, rng, device, dtype)
+    x_int = sample_uniform(bounds, n_interior, rng, device, dtype).requires_grad_(True)
+    
+    u_int = u_theta(x_int)
+    sigma_int = sigma_phi(x_int)
+    grad_u_int = gradient(u_int, x_int)
+    grad_sigma_int = gradient(sigma_int, x_int)
+    laplace_u_int = divergence(grad_u_int, x_int)
+    # Explicit product rule for div(sigma * grad(u)) to ensure operator-level correctness.
+    div_sigma_grad_u_int = torch.sum(grad_sigma_int * grad_u_int, dim=1, keepdim=True) + sigma_int * laplace_u_int
+
+    source_term = gaussian_source(
+        points=x_int,
+        source_center=source_center,
+        sink_center=sink_center,
+        current=current,
+        epsilon=gaussian_epsilon,
+    )
+    pde_residual = -div_sigma_grad_u_int - source_term
+    loss_pde = torch.mean(pde_residual**2)
+    loss_reg = torch.mean(torch.sqrt(torch.sum(grad_sigma_int * grad_sigma_int, dim=1) + tv_eps))
+
     x_dir, _ = sample_face(bounds, dirichlet_face, n_dirichlet, rng, device, dtype)
+    u_dir = u_theta(x_dir)
+    dirichlet_target = torch.as_tensor(dirichlet_value, device=device, dtype=dtype)
+    loss_dirichlet = torch.mean((u_dir - dirichlet_target) ** 2)
 
     if neumann_faces:
         x_neu_list: list[Tensor] = []
@@ -401,71 +424,45 @@ def compute_losses(
 
     x_src, n_src = sample_sphere(source_center, flux_radius, n_flux_source, rng, device, dtype)
     x_sink, n_sink = sample_sphere(sink_center, flux_radius, n_flux_sink, rng, device, dtype)
-
-    n_data = 0 if obs_points is None else int(obs_points.shape[0])
-    all_blocks = [x_int, x_dir, x_neu, x_src, x_sink]
-    if n_data > 0:
-        all_blocks.append(obs_points)
-
-    x_all = torch.cat(all_blocks, dim=0).detach().requires_grad_(True)
-
-    u_all = u_theta(x_all)
-    sigma_all = sigma_phi(x_all)
-    grad_u_all = gradient(u_all, x_all)
-    grad_sigma_all = gradient(sigma_all, x_all)
-    laplace_u_all = divergence(grad_u_all, x_all)
-    # Explicit product rule for div(sigma * grad(u)) to ensure operator-level correctness.
-    div_sigma_grad_u_all = torch.sum(grad_sigma_all * grad_u_all, dim=1, keepdim=True) + sigma_all * laplace_u_all
-
-    cursor = 0
-    s_int = slice(cursor, cursor + x_int.shape[0])
-    cursor += x_int.shape[0]
-    s_dir = slice(cursor, cursor + x_dir.shape[0])
-    cursor += x_dir.shape[0]
-    s_neu = slice(cursor, cursor + x_neu.shape[0])
-    cursor += x_neu.shape[0]
-    s_src = slice(cursor, cursor + x_src.shape[0])
-    cursor += x_src.shape[0]
-    s_sink = slice(cursor, cursor + x_sink.shape[0])
-    cursor += x_sink.shape[0]
-    s_data = None if n_data == 0 else slice(cursor, cursor + n_data)
-
-    source_term = gaussian_source(
-        points=x_all[s_int],
-        source_center=source_center,
-        sink_center=sink_center,
-        current=current,
-        epsilon=gaussian_epsilon,
-    )
-    pde_residual = -div_sigma_grad_u_all[s_int] - source_term
-    loss_pde = torch.mean(pde_residual**2)
-
-    dirichlet_target = torch.as_tensor(dirichlet_value, device=device, dtype=dtype)
-    loss_dirichlet = torch.mean((u_all[s_dir] - dirichlet_target) ** 2)
-
-    if x_neu.shape[0] > 0:
-        target_flux = torch.as_tensor(neumann_target_flux, device=device, dtype=dtype)
-        normal_flux = -torch.sum(sigma_all[s_neu] * grad_u_all[s_neu] * n_neu, dim=1, keepdim=True)
-        loss_neumann = torch.mean((normal_flux - target_flux) ** 2)
+    
+    x_flux_neu = torch.cat([x_neu, x_src, x_sink], dim=0).detach().requires_grad_(True)
+    if x_flux_neu.shape[0] > 0:
+        u_flux_neu = u_theta(x_flux_neu)
+        sigma_flux_neu = sigma_phi(x_flux_neu)
+        grad_u_flux_neu = gradient(u_flux_neu, x_flux_neu)
+        
+        cursor = 0
+        s_neu = slice(cursor, cursor + x_neu.shape[0])
+        cursor += x_neu.shape[0]
+        s_src = slice(cursor, cursor + x_src.shape[0])
+        cursor += x_src.shape[0]
+        s_sink = slice(cursor, cursor + x_sink.shape[0])
+    
+        if x_neu.shape[0] > 0:
+            target_flux = torch.as_tensor(neumann_target_flux, device=device, dtype=dtype)
+            normal_flux = -torch.sum(sigma_flux_neu[s_neu] * grad_u_flux_neu[s_neu] * n_neu, dim=1, keepdim=True)
+            loss_neumann = torch.mean((normal_flux - target_flux) ** 2)
+        else:
+            loss_neumann = torch.zeros((), device=device, dtype=dtype)
+            
+        src_flux = -torch.sum(sigma_flux_neu[s_src] * grad_u_flux_neu[s_src] * n_src, dim=1, keepdim=True)
+        sink_flux = -torch.sum(sigma_flux_neu[s_sink] * grad_u_flux_neu[s_sink] * n_sink, dim=1, keepdim=True)
     else:
         loss_neumann = torch.zeros((), device=device, dtype=dtype)
+        src_flux = torch.zeros((1, 1), device=device, dtype=dtype)
+        sink_flux = torch.zeros((1, 1), device=device, dtype=dtype)
 
     loss_bc = loss_dirichlet + loss_neumann
-
-    grad_sigma_int = grad_sigma_all[s_int]
-    loss_reg = torch.mean(torch.sqrt(torch.sum(grad_sigma_int * grad_sigma_int, dim=1) + tv_eps))
-
-    src_flux = -torch.sum(sigma_all[s_src] * grad_u_all[s_src] * n_src, dim=1, keepdim=True)
-    sink_flux = -torch.sum(sigma_all[s_sink] * grad_u_all[s_sink] * n_sink, dim=1, keepdim=True)
 
     control_area = 4.0 * math.pi * (float(flux_radius) ** 2)
     flux_target = torch.as_tensor(float(current) / control_area, device=device, dtype=dtype)
     loss_flux = (torch.mean(src_flux) - flux_target) ** 2 + (torch.mean(sink_flux) + flux_target) ** 2
 
-    if s_data is None or obs_values is None:
+    if obs_points is None or obs_values is None:
         loss_data = torch.zeros((), device=device, dtype=dtype)
     else:
-        loss_data = torch.mean((u_all[s_data] - obs_values) ** 2)
+        u_data = u_theta(obs_points)
+        loss_data = torch.mean((u_data - obs_values) ** 2)
 
     loss_total = (
         float(w_data) * loss_data
@@ -484,7 +481,7 @@ def compute_losses(
         "total": loss_total,
         "bc_dirichlet": loss_dirichlet,
         "bc_neumann": loss_neumann,
-        "sigma_mean": torch.mean(sigma_all[s_int]),
+        "sigma_mean": torch.mean(sigma_int),
     }
 
 
@@ -543,8 +540,13 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     ).to(device=device, dtype=dtype)
 
     optimizer_cfg = config["training"].get("optimizer", {}) if mode == "train" else inverse_cfg.get("optimizer", {})
+    if mode == "train":
+        params = list(u_theta.parameters())
+    else:
+        params = list(u_theta.parameters()) + list(sigma_phi.parameters())
+        
     optimizer = torch.optim.Adam(
-        list(u_theta.parameters()) + list(sigma_phi.parameters()),
+        params,
         lr=float(optimizer_cfg.get("lr", 1e-3)),
         weight_decay=float(optimizer_cfg.get("weight_decay", 0.0)),
     )
@@ -571,13 +573,22 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     epochs = int(run_cfg.get("epochs", 1000))
     log_every = int(run_cfg.get("log_every", 20))
     loss_weights_cfg = run_cfg.get("loss_weights", {}) if isinstance(run_cfg.get("loss_weights", {}), dict) else {}
-    loss_weights = {
-        "data": float(loss_weights_cfg.get("data", 1.0)),
-        "pde": float(loss_weights_cfg.get("pde", 1.0)),
-        "bc": float(loss_weights_cfg.get("bc", 1.0)),
-        "reg": float(loss_weights_cfg.get("reg", 1.0)),
-        "flux": float(loss_weights_cfg.get("flux", 1.0)),
-    }
+    if mode == "train":
+        loss_weights = {
+            "data": 0.0,
+            "pde": float(loss_weights_cfg.get("pde", 1.0)),
+            "bc": float(loss_weights_cfg.get("bc", 1.0)),
+            "reg": 0.0,
+            "flux": float(loss_weights_cfg.get("flux", 1.0)),
+        }
+    else:
+        loss_weights = {
+            "data": float(loss_weights_cfg.get("data", 1.0)),
+            "pde": float(loss_weights_cfg.get("pde", 1.0)),
+            "bc": float(loss_weights_cfg.get("bc", 1.0)),
+            "reg": float(loss_weights_cfg.get("reg", 1.0)),
+            "flux": float(loss_weights_cfg.get("flux", 1.0)),
+        }
 
     source_cfg = inverse_cfg.get("source_model", {})
     current = float(source_cfg.get("current", 1.0))
@@ -620,54 +631,62 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
 
     neumann_target_flux = float(bc_cfg.get("neumann_target_flux", 0.0))
 
-    tv_eps = float(inverse_cfg.get("regularization", {}).get("tv_eps", 1e-8))
+    if mode == "invert":
+        tv_eps = float(inverse_cfg.get("regularization", {}).get("tv_eps", 1e-8))
+    else:
+        tv_eps = 0.0
 
-    obs_cfg = inverse_cfg.get("observations", {})
-    obs_raw = obs_cfg.get("path")
-    obs_path = None if obs_raw in (None, "", "null") else Path(str(obs_raw))
-    if obs_path is not None and not obs_path.is_absolute():
-        obs_path = project_root / obs_path
+    if mode == "invert":
+        obs_cfg = inverse_cfg.get("observations", {})
+        obs_raw = obs_cfg.get("path")
+        obs_path = None if obs_raw in (None, "", "null") else Path(str(obs_raw))
+        if obs_path is not None and not obs_path.is_absolute():
+            obs_path = project_root / obs_path
 
-    obs_delimiter = _string_or_default(obs_cfg.get("delimiter", ","), ",")
-    obs_skiprows = int(obs_cfg.get("skiprows", 0))
-    obs_format = _string_or_default(obs_cfg.get("format", "auto"), "auto")
-    obs_has_header = bool(obs_cfg.get("has_header", False))
-    obs_comment_prefix = obs_cfg.get("comment_prefix", "#")
-    obs_point_columns = [int(i) for i in obs_cfg.get("point_columns", [0, 1, 2])]
-    obs_value_column = int(obs_cfg.get("value_column", 3))
-    obs_point_column_names = obs_cfg.get("point_column_names")
-    if isinstance(obs_point_column_names, tuple):
-        obs_point_column_names = list(obs_point_column_names)
-    obs_value_column_name = obs_cfg.get("value_column_name")
-    obs_coordinate_scale = obs_cfg.get("coordinate_scale")
-    obs_coordinate_offset = obs_cfg.get("coordinate_offset")
-    obs_value_scale = float(obs_cfg.get("value_scale", 1.0))
-    obs_value_offset = float(obs_cfg.get("value_offset", 0.0))
-    obs_npz_point_key = _string_or_default(obs_cfg.get("npz_point_key", "points"), "points")
-    obs_npz_value_key = _string_or_default(obs_cfg.get("npz_value_key", "potential"), "potential")
-    obs_drop_invalid_rows = bool(obs_cfg.get("drop_invalid_rows", False))
+        obs_delimiter = _string_or_default(obs_cfg.get("delimiter", ","), ",")
+        obs_skiprows = int(obs_cfg.get("skiprows", 0))
+        obs_format = _string_or_default(obs_cfg.get("format", "auto"), "auto")
+        obs_has_header = bool(obs_cfg.get("has_header", False))
+        obs_comment_prefix = obs_cfg.get("comment_prefix", "#")
+        obs_point_columns = [int(i) for i in obs_cfg.get("point_columns", [0, 1, 2])]
+        obs_value_column = int(obs_cfg.get("value_column", 3))
+        obs_point_column_names = obs_cfg.get("point_column_names")
+        if isinstance(obs_point_column_names, tuple):
+            obs_point_column_names = list(obs_point_column_names)
+        obs_value_column_name = obs_cfg.get("value_column_name")
+        obs_coordinate_scale = obs_cfg.get("coordinate_scale")
+        obs_coordinate_offset = obs_cfg.get("coordinate_offset")
+        obs_value_scale = float(obs_cfg.get("value_scale", 1.0))
+        obs_value_offset = float(obs_cfg.get("value_offset", 0.0))
+        obs_npz_point_key = _string_or_default(obs_cfg.get("npz_point_key", "points"), "points")
+        obs_npz_value_key = _string_or_default(obs_cfg.get("npz_value_key", "potential"), "potential")
+        obs_drop_invalid_rows = bool(obs_cfg.get("drop_invalid_rows", False))
 
-    obs_points, obs_values = load_observations(
-        path=obs_path,
-        delimiter=obs_delimiter,
-        skiprows=obs_skiprows,
-        point_columns=obs_point_columns,
-        value_column=obs_value_column,
-        device=device,
-        dtype=dtype,
-        format=obs_format,
-        has_header=obs_has_header,
-        comment_prefix=obs_comment_prefix,
-        point_column_names=obs_point_column_names,
-        value_column_name=obs_value_column_name,
-        coordinate_scale=obs_coordinate_scale,
-        coordinate_offset=obs_coordinate_offset,
-        value_scale=obs_value_scale,
-        value_offset=obs_value_offset,
-        npz_point_key=obs_npz_point_key,
-        npz_value_key=obs_npz_value_key,
-        drop_invalid_rows=obs_drop_invalid_rows,
-    )
+        obs_points, obs_values = load_observations(
+            path=obs_path,
+            delimiter=obs_delimiter,
+            skiprows=obs_skiprows,
+            point_columns=obs_point_columns,
+            value_column=obs_value_column,
+            device=device,
+            dtype=dtype,
+            format=obs_format,
+            has_header=obs_has_header,
+            comment_prefix=obs_comment_prefix,
+            point_column_names=obs_point_column_names,
+            value_column_name=obs_value_column_name,
+            coordinate_scale=obs_coordinate_scale,
+            coordinate_offset=obs_coordinate_offset,
+            value_scale=obs_value_scale,
+            value_offset=obs_value_offset,
+            npz_point_key=obs_npz_point_key,
+            npz_value_key=obs_npz_value_key,
+            drop_invalid_rows=obs_drop_invalid_rows,
+        )
+    else:
+        obs_path = None
+        obs_points = None
+        obs_values = None
 
     rng = np.random.default_rng(seed)
     history: list[dict[str, float]] = []
