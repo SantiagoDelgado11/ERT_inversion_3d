@@ -13,11 +13,15 @@ from __future__ import annotations
 import csv
 import math
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
-from torch import Tensor, nn
+import torch.nn as nn
+from torch import Tensor
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.observations import load_observation_arrays
 from src.models.pinn.electric_potential_network import PotentialNet
@@ -462,7 +466,7 @@ def compute_losses(
         loss_data = torch.zeros((), device=device, dtype=dtype)
     else:
         u_data = u_theta(obs_points)
-        loss_data = torch.mean((u_data - obs_values) ** 2)
+        loss_data = torch.mean((u_data - obs_values.view(-1, 1)) ** 2)
 
     loss_total = (
         float(w_data) * loss_data
@@ -802,8 +806,8 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     if obs_points is not None and obs_values is not None:
         with torch.no_grad():
             obs_pred = u_theta(obs_points)
-        obs_true_np = obs_values.detach().cpu().numpy()
-        obs_pred_np = obs_pred.detach().cpu().numpy()
+        obs_true_np = obs_values.detach().cpu().numpy().reshape(-1)
+        obs_pred_np = obs_pred.detach().cpu().numpy().reshape(-1)
         obs_points_np = obs_points.detach().cpu().numpy()
         observation_fit = {
             "count": int(obs_points.shape[0]),

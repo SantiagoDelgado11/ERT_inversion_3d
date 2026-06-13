@@ -1,0 +1,44 @@
+{
+  "mode": "train",
+  "epochs": 2,
+  "final_metrics": {
+    "epoch": 2.0,
+    "data": 0.0,
+    "pde": 0.042371973395347595,
+    "bc": 0.21521568298339844,
+    "reg": 0.28741976618766785,
+    "flux": 2023.16845703125,
+    "total": 2023.426025390625,
+    "bc_dirichlet": 0.15217095613479614,
+    "bc_neumann": 0.0630447193980217,
+    "sigma_mean": 0.6920400857925415
+  },
+  "history_summary": {
+    "initial_total": 2023.7696533203125,
+    "final_total": 2023.426025390625,
+    "best_total": 2023.426025390625,
+    "loss_reduction_abs": 0.3436279296875,
+    "loss_reduction_fraction": 0.0001697959691824236
+  },
+  "loss_history": {
+    "json": "test_out\\train_loss_history.json",
+    "csv": "test_out\\train_loss_history.csv"
+  },
+  "checkpoint": "test_out\\checkpoints\\train_model.pt",
+  "weights": {
+    "summary": "test_out\\weights\\weights_summary_train.json",
+    "npz": "test_out\\weights\\weights_train.npz"
+  },
+  "loss_weights": {
+    "data": 0.0,
+    "pde": 1.0,
+    "bc": 1.0,
+    "reg": 0.0,
+    "flux": 1.0
+  },
+  "observations": null,
+  "observation_fit": null,
+  "source_electrode": 0,
+  "sink_electrode": 1,
+  "warm_start_checkpoint": null
+}

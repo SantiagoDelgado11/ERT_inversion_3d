@@ -1,0 +1,44 @@
+{
+  "mode": "invert",
+  "epochs": 2,
+  "final_metrics": {
+    "epoch": 2.0,
+    "data": 0.0,
+    "pde": 0.04538161680102348,
+    "bc": 0.2288069725036621,
+    "reg": 0.28186169266700745,
+    "flux": 2022.7926025390625,
+    "total": 2023.3486328125,
+    "bc_dirichlet": 0.16236591339111328,
+    "bc_neumann": 0.06644106656312943,
+    "sigma_mean": 0.6973392963409424
+  },
+  "history_summary": {
+    "initial_total": 2023.58349609375,
+    "final_total": 2023.3486328125,
+    "best_total": 2023.3486328125,
+    "loss_reduction_abs": 0.23486328125,
+    "loss_reduction_fraction": 0.00011606305433078061
+  },
+  "loss_history": {
+    "json": "test_out\\invert_loss_history.json",
+    "csv": "test_out\\invert_loss_history.csv"
+  },
+  "checkpoint": "test_out\\checkpoints\\invert_model.pt",
+  "weights": {
+    "summary": "test_out\\weights\\weights_summary_invert.json",
+    "npz": "test_out\\weights\\weights_invert.npz"
+  },
+  "loss_weights": {
+    "data": 1.0,
+    "pde": 1.0,
+    "bc": 1.0,
+    "reg": 1.0,
+    "flux": 1.0
+  },
+  "observations": null,
+  "observation_fit": null,
+  "source_electrode": 0,
+  "sink_electrode": 1,
+  "warm_start_checkpoint": "test_out\\checkpoints\\train_model.pt"
+}
