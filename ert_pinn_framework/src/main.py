@@ -461,9 +461,24 @@ def compute_losses(
     if obs_points is None or obs_values is None:
         loss_data = torch.zeros((), device=device, dtype=dtype)
     else:
-        features_obs = build_potential_features(obs_points, source_center, sink_center, current)
-        u_data = u_theta(features_obs)
-        loss_data = torch.mean((u_data - obs_values.view(-1, 1)) ** 2)
+        if obs_points.shape[1] == 12:
+            m_pos = obs_points[:, 0:3]
+            n_pos = obs_points[:, 3:6]
+            a_pos = obs_points[:, 6:9]
+            b_pos = obs_points[:, 9:12]
+            
+            feat_m = build_potential_features(m_pos, a_pos, b_pos, current)
+            v_pred_m = u_theta(feat_m)
+            
+            feat_n = build_potential_features(n_pos, a_pos, b_pos, current)
+            v_pred_n = u_theta(feat_n)
+            
+            dv_pred = v_pred_m - v_pred_n
+            loss_data = torch.mean((dv_pred - obs_values.view(-1, 1)) ** 2)
+        else:
+            features_obs = build_potential_features(obs_points, source_center, sink_center, current)
+            u_data = u_theta(features_obs)
+            loss_data = torch.mean((u_data - obs_values.view(-1, 1)) ** 2)
 
     loss_total = (
         float(w_data) * loss_data
@@ -788,12 +803,32 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         mode=mode,
     )
 
-    pred_points = geometry.sample_interior(n_prediction, rng, device, dtype)
-    with torch.no_grad():
-        pred_source_center = clamp_center(electrodes[source_idx], bounds, center_margin)
-        pred_sink_center = clamp_center(electrodes[sink_idx], bounds, center_margin)
-        pred_features = build_potential_features(pred_points, pred_source_center, pred_sink_center, rep_injection.current)
-        pred_u = u_theta(pred_features)
+    try:
+        from src.acquisition.arrays import PolePoleArray
+        geom_array = PolePoleArray(electrodes)
+        a_idx, b_idx, m_idx, n_idx = geom_array.generate_indices()
+        if a_idx.shape[0] > n_prediction:
+            perm = torch.randperm(a_idx.shape[0], device=device)[:n_prediction]
+            a_idx, b_idx, m_idx, n_idx = a_idx[perm], b_idx[perm], m_idx[perm], n_idx[perm]
+            
+        def get_pos(idx):
+            valid = torch.where(idx >= 0, idx, torch.zeros_like(idx))
+            return electrodes[valid]
+
+        m_pos, n_pos, a_pos, b_pos = get_pos(m_idx), get_pos(n_idx), get_pos(a_idx), get_pos(b_idx)
+        pred_points = torch.cat([m_pos, n_pos, a_pos, b_pos], dim=1)
+        
+        with torch.no_grad():
+            feat_m = build_potential_features(m_pos, a_pos, b_pos, rep_injection.current)
+            feat_n = build_potential_features(n_pos, a_pos, b_pos, rep_injection.current)
+            pred_u = u_theta(feat_m) - u_theta(feat_n)
+    except Exception:
+        pred_points = geometry.sample_interior(n_prediction, rng, device, dtype)
+        with torch.no_grad():
+            pred_source_center = clamp_center(electrodes[source_idx], bounds, center_margin)
+            pred_sink_center = clamp_center(electrodes[sink_idx], bounds, center_margin)
+            pred_features = build_potential_features(pred_points, pred_source_center, pred_sink_center, rep_injection.current)
+            pred_u = u_theta(pred_features)
 
     prediction_payload = {
         "points": pred_points.detach().cpu().numpy(),
@@ -815,8 +850,18 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     observation_fit = None
     if obs_points is not None and obs_values is not None:
         with torch.no_grad():
-            obs_features = build_potential_features(obs_points, pred_source_center, pred_sink_center, rep_injection.current)
-            obs_pred = u_theta(obs_features)
+            if obs_points.shape[1] == 12:
+                m_pos = obs_points[:, 0:3]
+                n_pos = obs_points[:, 3:6]
+                a_pos = obs_points[:, 6:9]
+                b_pos = obs_points[:, 9:12]
+                
+                feat_m = build_potential_features(m_pos, a_pos, b_pos, rep_injection.current)
+                feat_n = build_potential_features(n_pos, a_pos, b_pos, rep_injection.current)
+                obs_pred = u_theta(feat_m) - u_theta(feat_n)
+            else:
+                obs_features = build_potential_features(obs_points, pred_source_center, pred_sink_center, rep_injection.current)
+                obs_pred = u_theta(obs_features)
         obs_true_np = obs_values.detach().cpu().numpy().reshape(-1)
         obs_pred_np = obs_pred.detach().cpu().numpy().reshape(-1)
         obs_points_np = obs_points.detach().cpu().numpy()

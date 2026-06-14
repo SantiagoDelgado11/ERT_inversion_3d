@@ -38,13 +38,22 @@ def build_potential_features(
     device = points.device
     dtype = points.dtype
 
-    src = source_center.view(1, 3).expand(N, 3)
-    snk = sink_center.view(1, 3).expand(N, 3)
+    if source_center.dim() == 1 or source_center.shape[0] == 1:
+        src = source_center.view(1, 3).expand(N, 3)
+    else:
+        src = source_center
+
+    if sink_center.dim() == 1 or sink_center.shape[0] == 1:
+        snk = sink_center.view(1, 3).expand(N, 3)
+    else:
+        snk = sink_center
     
     if isinstance(current, float):
         curr = torch.full((N, 1), current, device=device, dtype=dtype)
-    else:
+    elif current.dim() == 0 or current.shape[0] == 1:
         curr = current.view(1, 1).expand(N, 1)
+    else:
+        curr = current.view(N, 1)
 
     r_src = points - src
     r_snk = points - snk

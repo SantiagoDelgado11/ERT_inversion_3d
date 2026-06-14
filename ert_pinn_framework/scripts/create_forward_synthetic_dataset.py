@@ -128,11 +128,12 @@ def _array_stats(values: np.ndarray) -> dict[str, float]:
 def _write_csv(path: Path, points: np.ndarray, potential: np.ndarray) -> None:
     table = np.hstack([points, potential.reshape(-1, 1)])
     path.parent.mkdir(parents=True, exist_ok=True)
+    header = "x,y,z,potential" if points.shape[1] == 3 else "m_x,m_y,m_z,n_x,n_y,n_z,a_x,a_y,a_z,b_x,b_y,b_z,potential"
     np.savetxt(
         path,
         table,
         delimiter=",",
-        header="x,y,z,potential",
+        header=header,
         comments="# ",
         fmt="%.10e",
     )

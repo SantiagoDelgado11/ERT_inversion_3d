@@ -241,8 +241,8 @@ def _load_npz_archive(
             )
         value_array = np.asarray(data[value_key], dtype=np.float64)
 
-    if point_array.ndim != 2 or point_array.shape[1] != 3:
-        raise ValueError(f"Point array in {path} must have shape (N, 3); got {point_array.shape}")
+    if point_array.ndim != 2 or point_array.shape[1] not in (3, 12):
+        raise ValueError(f"Point array in {path} must have shape (N, 3) or (N, 12); got {point_array.shape}")
 
     points = point_array.copy()
     values = np.asarray(value_array, dtype=np.float64).reshape(-1, 1)
@@ -253,6 +253,9 @@ def _load_npz_archive(
 
     scale = _as_float_vector(coordinate_scale, name="coordinate_scale", default=1.0)
     offset = _as_float_vector(coordinate_offset, name="coordinate_offset", default=0.0)
+    if points.shape[1] == 12:
+        scale = np.tile(scale, 4)
+        offset = np.tile(offset, 4)
     points = points * scale + offset
     values = values * float(value_scale) + float(value_offset)
 
@@ -341,6 +344,9 @@ def load_observation_arrays(
 
     scale = _as_float_vector(coordinate_scale, name="coordinate_scale", default=1.0)
     offset = _as_float_vector(coordinate_offset, name="coordinate_offset", default=0.0)
+    if points.shape[1] == 12:
+        scale = np.tile(scale, 4)
+        offset = np.tile(offset, 4)
     points = points * scale + offset
     values = values * float(value_scale) + float(value_offset)
 
