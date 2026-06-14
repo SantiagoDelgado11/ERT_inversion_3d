@@ -27,16 +27,9 @@ from src.data.observations import load_observation_arrays
 from src.models.pinn.electric_potential_network import PotentialNet
 from src.models.pinn.electrical_conductivity_network import ConductivityNet
 from src.utils.io import save_json
-
-
-FACE_SPECS: dict[str, tuple[int, float]] = {
-    "x_min": (0, -1.0),
-    "x_max": (0, 1.0),
-    "y_min": (1, -1.0),
-    "y_max": (1, 1.0),
-    "z_min": (2, -1.0),
-    "z_max": (2, 1.0),
-}
+from src.geometry import Geometry, BoxGeometry, FACE_SPECS
+from src.acquisition import build_circular_electrodes, InjectionSchedule
+from src.models.pinn.features import build_potential_features
 
 
 def _string_or_default(value: object, default: str) -> str:
@@ -360,7 +353,7 @@ def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, flo
 def compute_losses(
     u_theta: PotentialNet,
     sigma_phi: ConductivityNet,
-    bounds: dict[str, tuple[float, float]],
+    geometry: Geometry,
     n_interior: int,
     n_dirichlet: int,
     n_neumann_per_face: int,
@@ -387,9 +380,10 @@ def compute_losses(
     device: torch.device,
     dtype: torch.dtype,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    x_int = sample_uniform(bounds, n_interior, rng, device, dtype).requires_grad_(True)
+    x_int = geometry.sample_interior(n_interior, rng, device, dtype).requires_grad_(True)
     
-    u_int = u_theta(x_int)
+    features_int = build_potential_features(x_int, source_center, sink_center, current)
+    u_int = u_theta(features_int)
     sigma_int = sigma_phi(x_int)
     grad_u_int = gradient(u_int, x_int)
     grad_sigma_int = gradient(sigma_int, x_int)
@@ -408,8 +402,9 @@ def compute_losses(
     loss_pde = torch.mean(pde_residual**2)
     loss_reg = torch.mean(torch.sqrt(torch.sum(grad_sigma_int * grad_sigma_int, dim=1) + tv_eps))
 
-    x_dir, _ = sample_face(bounds, dirichlet_face, n_dirichlet, rng, device, dtype)
-    u_dir = u_theta(x_dir)
+    x_dir, _ = geometry.sample_boundary(dirichlet_face, n_dirichlet, rng, device, dtype)
+    features_dir = build_potential_features(x_dir, source_center, sink_center, current)
+    u_dir = u_theta(features_dir)
     dirichlet_target = torch.as_tensor(dirichlet_value, device=device, dtype=dtype)
     loss_dirichlet = torch.mean((u_dir - dirichlet_target) ** 2)
 
@@ -417,7 +412,7 @@ def compute_losses(
         x_neu_list: list[Tensor] = []
         n_neu_list: list[Tensor] = []
         for face in neumann_faces:
-            face_points, face_normals = sample_face(bounds, face, n_neumann_per_face, rng, device, dtype)
+            face_points, face_normals = geometry.sample_boundary(face, n_neumann_per_face, rng, device, dtype)
             x_neu_list.append(face_points)
             n_neu_list.append(face_normals)
         x_neu = torch.cat(x_neu_list, dim=0)
@@ -431,7 +426,8 @@ def compute_losses(
     
     x_flux_neu = torch.cat([x_neu, x_src, x_sink], dim=0).detach().requires_grad_(True)
     if x_flux_neu.shape[0] > 0:
-        u_flux_neu = u_theta(x_flux_neu)
+        features_flux_neu = build_potential_features(x_flux_neu, source_center, sink_center, current)
+        u_flux_neu = u_theta(features_flux_neu)
         sigma_flux_neu = sigma_phi(x_flux_neu)
         grad_u_flux_neu = gradient(u_flux_neu, x_flux_neu)
         
@@ -465,7 +461,8 @@ def compute_losses(
     if obs_points is None or obs_values is None:
         loss_data = torch.zeros((), device=device, dtype=dtype)
     else:
-        u_data = u_theta(obs_points)
+        features_obs = build_potential_features(obs_points, source_center, sink_center, current)
+        u_data = u_theta(features_obs)
         loss_data = torch.mean((u_data - obs_values.view(-1, 1)) ** 2)
 
     loss_total = (
@@ -526,6 +523,7 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         "y": tuple(data_cfg["domain"]["bounds"]["y"]),
         "z": tuple(data_cfg["domain"]["bounds"]["z"]),
     }
+    geometry = BoxGeometry(bounds)
     project_root = Path(config.get("_meta", {}).get("project_root", Path(output_root).resolve().parent.parent))
 
     u_theta = PotentialNet(
@@ -605,19 +603,19 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     electrode_count = int(electrodes_cfg.get("count", 16))
     electrode_radius = float(electrodes_cfg.get("radius", 1.0))
     electrode_z = float(electrodes_cfg.get("z", 0.0))
-    electrodes = build_electrodes(electrode_count, electrode_radius, electrode_z, device, dtype)
+    electrodes = build_circular_electrodes(electrode_count, electrode_radius, electrode_z, device, dtype)
 
-    fixed_pair = source_cfg.get("fixed_electrode_pair", [0, 1])
-    if not isinstance(fixed_pair, (list, tuple)) or len(fixed_pair) != 2:
-        raise ValueError("source_model.fixed_electrode_pair must be [source_idx, sink_idx]")
-
-    source_idx, sink_idx = int(fixed_pair[0]), int(fixed_pair[1])
-    if source_idx == sink_idx:
-        raise ValueError("source and sink electrodes must be different")
+    injection_schedule = InjectionSchedule.from_config(
+        config.get("acquisition", {}),
+        source_cfg
+    )
 
     center_margin = max(3.0 * gaussian_epsilon, flux_radius)
-    source_center = clamp_center(electrodes[source_idx], bounds, center_margin)
-    sink_center = clamp_center(electrodes[sink_idx], bounds, center_margin)
+    
+    # Representative injection for prediction / checkpointing
+    rep_injection = injection_schedule.injections[0]
+    source_idx = rep_injection.source_idx
+    sink_idx = rep_injection.sink_idx
 
     bc_cfg = inverse_cfg.get("boundary_conditions", {})
     dirichlet_face = str(bc_cfg.get("dirichlet_face", "z_max"))
@@ -698,10 +696,19 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     for epoch in range(1, epochs + 1):
         optimizer.zero_grad(set_to_none=True)
 
+        # Select a random injection for this epoch
+        active_injection = random.choice(injection_schedule.injections)
+        act_source_idx = active_injection.source_idx
+        act_sink_idx = active_injection.sink_idx
+        act_current = active_injection.current
+        
+        act_source_center = clamp_center(electrodes[act_source_idx], bounds, center_margin)
+        act_sink_center = clamp_center(electrodes[act_sink_idx], bounds, center_margin)
+
         total_loss, losses = compute_losses(
             u_theta=u_theta,
             sigma_phi=sigma_phi,
-            bounds=bounds,
+            geometry=geometry,
             n_interior=n_interior,
             n_dirichlet=n_dirichlet,
             n_neumann_per_face=n_neumann_per_face,
@@ -711,9 +718,9 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             dirichlet_value=dirichlet_value,
             neumann_faces=neumann_faces,
             neumann_target_flux=neumann_target_flux,
-            source_center=source_center,
-            sink_center=sink_center,
-            current=current,
+            source_center=act_source_center,
+            sink_center=act_sink_center,
+            current=act_current,
             gaussian_epsilon=gaussian_epsilon,
             flux_radius=flux_radius,
             tv_eps=tv_eps,
@@ -781,9 +788,12 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         mode=mode,
     )
 
-    pred_points = sample_uniform(bounds, n_prediction, rng, device, dtype)
+    pred_points = geometry.sample_interior(n_prediction, rng, device, dtype)
     with torch.no_grad():
-        pred_u = u_theta(pred_points)
+        pred_source_center = clamp_center(electrodes[source_idx], bounds, center_margin)
+        pred_sink_center = clamp_center(electrodes[sink_idx], bounds, center_margin)
+        pred_features = build_potential_features(pred_points, pred_source_center, pred_sink_center, rep_injection.current)
+        pred_u = u_theta(pred_features)
 
     prediction_payload = {
         "points": pred_points.detach().cpu().numpy(),
@@ -805,7 +815,8 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     observation_fit = None
     if obs_points is not None and obs_values is not None:
         with torch.no_grad():
-            obs_pred = u_theta(obs_points)
+            obs_features = build_potential_features(obs_points, pred_source_center, pred_sink_center, rep_injection.current)
+            obs_pred = u_theta(obs_features)
         obs_true_np = obs_values.detach().cpu().numpy().reshape(-1)
         obs_pred_np = obs_pred.detach().cpu().numpy().reshape(-1)
         obs_points_np = obs_points.detach().cpu().numpy()

@@ -27,7 +27,7 @@ config = {
     },
     "model": {
         "potential": {
-            "input_dim": 3,
+            "input_dim": 22,
             "hidden_dim": 16,
             "num_hidden_layers": 2,
             "activation": "tanh"
