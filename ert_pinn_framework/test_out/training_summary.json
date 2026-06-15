@@ -8,17 +8,17 @@
     "bc": 0.3302704691886902,
     "reg": 0.2870798408985138,
     "flux": 2025.8583984375,
-    "total": 2026.3060302734375,
+    "total": 2024.280517578125,
     "bc_dirichlet": 0.3192092180252075,
     "bc_neumann": 0.011061246506869793,
     "sigma_mean": 0.6895408034324646
   },
   "history_summary": {
     "initial_total": 2026.0247802734375,
-    "final_total": 2026.3060302734375,
-    "best_total": 2026.0247802734375,
-    "loss_reduction_abs": -0.28125,
-    "loss_reduction_fraction": -0.00013881863772764006
+    "final_total": 2024.280517578125,
+    "best_total": 2024.280517578125,
+    "loss_reduction_abs": 1.7442626953125,
+    "loss_reduction_fraction": 0.0008609286087197261
   },
   "loss_history": {
     "json": "test_out\\train_loss_history.json",

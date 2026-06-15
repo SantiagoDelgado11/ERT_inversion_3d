@@ -4,21 +4,21 @@
   "final_metrics": {
     "epoch": 2.0,
     "data": 0.0,
-    "pde": 0.1197291910648346,
-    "bc": 0.31729385256767273,
+    "pde": 0.11972849071025848,
+    "bc": 0.31729021668434143,
     "reg": 0.2785501182079315,
     "flux": 2023.1746826171875,
-    "total": 2023.8902587890625,
-    "bc_dirichlet": 0.3059002757072449,
-    "bc_neumann": 0.011393588967621326,
+    "total": 2021.86572265625,
+    "bc_dirichlet": 0.30589672923088074,
+    "bc_neumann": 0.011393493972718716,
     "sigma_mean": 0.694312572479248
   },
   "history_summary": {
-    "initial_total": 2023.6591796875,
-    "final_total": 2023.8902587890625,
-    "best_total": 2023.6591796875,
-    "loss_reduction_abs": -0.2310791015625,
-    "loss_reduction_fraction": -0.00011418874476589674
+    "initial_total": 2023.6593017578125,
+    "final_total": 2021.86572265625,
+    "best_total": 2021.86572265625,
+    "loss_reduction_abs": 1.7935791015625,
+    "loss_reduction_fraction": 0.0008863048735548229
   },
   "loss_history": {
     "json": "test_out\\invert_loss_history.json",

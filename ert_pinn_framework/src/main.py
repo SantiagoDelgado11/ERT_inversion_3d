@@ -30,6 +30,7 @@ from src.utils.io import save_json
 from src.geometry import Geometry, BoxGeometry, FACE_SPECS
 from src.acquisition import build_circular_electrodes, InjectionSchedule
 from src.models.pinn.features import build_potential_features
+from src.models.pinn.weights import AdaptiveLossWeighter
 
 
 def _string_or_default(value: object, default: str) -> str:
@@ -557,16 +558,46 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     ).to(device=device, dtype=dtype)
 
     optimizer_cfg = config["training"].get("optimizer", {}) if mode == "train" else inverse_cfg.get("optimizer", {})
+    run_cfg = config.get("training", {}) if mode == "train" else config.get("inverse", {})
+    loss_weights_cfg = run_cfg.get("loss_weights", {}) if isinstance(run_cfg.get("loss_weights", {}), dict) else {}
     if mode == "train":
-        params = list(u_theta.parameters())
+        loss_weights = {
+            "data": 0.0,
+            "pde": float(loss_weights_cfg.get("pde", 1.0)),
+            "bc": float(loss_weights_cfg.get("bc", 1.0)),
+            "reg": 0.0,
+            "flux": float(loss_weights_cfg.get("flux", 1.0)),
+        }
     else:
-        params = list(u_theta.parameters()) + list(sigma_phi.parameters())
+        loss_weights = {
+            "data": float(loss_weights_cfg.get("data", 1.0)),
+            "pde": float(loss_weights_cfg.get("pde", 1.0)),
+            "bc": float(loss_weights_cfg.get("bc", 1.0)),
+            "reg": float(loss_weights_cfg.get("reg", 1.0)),
+            "flux": float(loss_weights_cfg.get("flux", 1.0)),
+        }
+
+    active_keys = [k for k, v in loss_weights.items() if v > 0.0]
+    weighter = AdaptiveLossWeighter(keys=active_keys, initial_values={k: 0.0 for k in active_keys}).to(device)
+
+    if mode == "train":
+        params = list(u_theta.parameters()) + list(weighter.parameters())
+    else:
+        params = list(u_theta.parameters()) + list(sigma_phi.parameters()) + list(weighter.parameters())
         
     optimizer = torch.optim.Adam(
         params,
         lr=float(optimizer_cfg.get("lr", 1e-3)),
         weight_decay=float(optimizer_cfg.get("weight_decay", 0.0)),
     )
+    
+    try:
+        import wandb
+        use_wandb = run_cfg.get("use_wandb", False)
+        if use_wandb and wandb.run is None:
+            wandb.init(project="ert_pinn_3d", config=config, name=f"ERT_3D_{mode}")
+    except ImportError:
+        use_wandb = False
 
     warm_start_checkpoint = None
     if mode == "invert":
@@ -586,26 +617,8 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     n_neumann_per_face = int(sampling_cfg.get("neumann_points_per_face_per_epoch", sampling_cfg.get("boundary_points_per_face_per_epoch", 2000)))
     n_prediction = int(sampling_cfg.get("measurement_points", 512))
 
-    run_cfg = training_cfg if mode == "train" else inverse_cfg
     epochs = int(run_cfg.get("epochs", 1000))
     log_every = int(run_cfg.get("log_every", 20))
-    loss_weights_cfg = run_cfg.get("loss_weights", {}) if isinstance(run_cfg.get("loss_weights", {}), dict) else {}
-    if mode == "train":
-        loss_weights = {
-            "data": 0.0,
-            "pde": float(loss_weights_cfg.get("pde", 1.0)),
-            "bc": float(loss_weights_cfg.get("bc", 1.0)),
-            "reg": 0.0,
-            "flux": float(loss_weights_cfg.get("flux", 1.0)),
-        }
-    else:
-        loss_weights = {
-            "data": float(loss_weights_cfg.get("data", 1.0)),
-            "pde": float(loss_weights_cfg.get("pde", 1.0)),
-            "bc": float(loss_weights_cfg.get("bc", 1.0)),
-            "reg": float(loss_weights_cfg.get("reg", 1.0)),
-            "flux": float(loss_weights_cfg.get("flux", 1.0)),
-        }
 
     source_cfg = inverse_cfg.get("source_model", {})
     current = float(source_cfg.get("current", 1.0))
@@ -720,7 +733,7 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         act_source_center = clamp_center(electrodes[act_source_idx], bounds, center_margin)
         act_sink_center = clamp_center(electrodes[act_sink_idx], bounds, center_margin)
 
-        total_loss, losses = compute_losses(
+        _discard_static_total, loss_components = compute_losses(
             u_theta=u_theta,
             sigma_phi=sigma_phi,
             geometry=geometry,
@@ -751,16 +764,30 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             dtype=dtype,
         )
 
-        if not torch.isfinite(total_loss):
+        loss_total = weighter(loss_components)
+
+        if not torch.isfinite(loss_total):
             raise RuntimeError(f"Non-finite loss at epoch {epoch}")
 
-        total_loss.backward()
+        loss_total.backward()
+        
+        # Calculate gradient norm
+        grad_norm = sum(p.grad.norm().item() ** 2 for p in params if p.grad is not None) ** 0.5
+        
         optimizer.step()
 
         row = {"epoch": float(epoch)}
-        for key, value in losses.items():
+        for key, value in loss_components.items():
             row[key] = _scalar(value)
+        row["total"] = _scalar(loss_total)
         history.append(row)
+        
+        if use_wandb:
+            wandb_log = {"epoch": epoch, "loss_total": loss_total.item(), "grad_norm": grad_norm}
+            for k in active_keys:
+                wandb_log[f"loss_{k}"] = loss_components[k].item()
+            wandb_log.update({f"weight_{k}": w for k, w in weighter.get_weights().items()})
+            wandb.log(wandb_log)
 
         if epoch == 1 or epoch % max(1, log_every) == 0:
             print(
