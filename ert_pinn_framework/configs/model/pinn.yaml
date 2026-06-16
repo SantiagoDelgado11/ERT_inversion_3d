@@ -4,3 +4,13 @@ model:
     hidden_dim: 128
     num_hidden_layers: 6
     activation: tanh
+
+  # Optional: Inject analytical anomalies for forward synthetic datasets
+  analytical_conductivity:
+    background_sigma: 0.1
+    anomalies:
+      - type: sphere
+        center: [0.0, 0.0, 0.5]
+        radius: 0.2
+        value: 10.0
+        sharpness: 50.0

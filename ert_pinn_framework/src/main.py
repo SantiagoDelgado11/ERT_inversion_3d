@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data.observations import load_observation_arrays
 from src.models.pinn.electric_potential_network import PotentialNet
 from src.models.pinn.electrical_conductivity_network import ConductivityNet
+from src.models.pinn.analytical_conductivity import AnalyticalConductivity
 from src.utils.io import save_json
 from src.geometry import Geometry, BoxGeometry, FACE_SPECS
 from src.acquisition import build_circular_electrodes, InjectionSchedule
@@ -549,13 +550,22 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         activation=str(potential_cfg.get("activation", "tanh")),
     ).to(device=device, dtype=dtype)
 
-    sigma_phi = ConductivityNet(
+    sigma_phi_base = ConductivityNet(
         input_dim=int(conductivity_cfg.get("input_dim", 3)),
         hidden_dim=int(conductivity_cfg.get("hidden_dim", 128)),
         hidden_layers=int(conductivity_cfg.get("num_hidden_layers", 3)),
         activation=str(conductivity_cfg.get("activation", "tanh")),
         sigma_floor=float(conductivity_cfg.get("sigma_floor", 1e-6)),
     ).to(device=device, dtype=dtype)
+
+    if mode == "train" and "analytical_conductivity" in model_cfg:
+        analytical_cfg = model_cfg["analytical_conductivity"]
+        sigma_phi = AnalyticalConductivity(
+            background_sigma=float(analytical_cfg.get("background_sigma", 0.1)),
+            anomalies=analytical_cfg.get("anomalies", []),
+        ).to(device=device, dtype=dtype)
+    else:
+        sigma_phi = sigma_phi_base
 
     optimizer_cfg = config["training"].get("optimizer", {}) if mode == "train" else inverse_cfg.get("optimizer", {})
     run_cfg = config.get("training", {}) if mode == "train" else config.get("inverse", {})
