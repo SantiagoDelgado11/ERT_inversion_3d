@@ -337,7 +337,9 @@ def _load_model_checkpoint(
         raise KeyError(f"Checkpoint {checkpoint_path} is missing model weights")
 
     u_theta.load_state_dict(checkpoint["u_theta"])
-    sigma_phi.load_state_dict(checkpoint["sigma_phi"])
+    # strict=False is required because forward training using AnalyticalConductivity
+    # yields an empty state_dict, but inversion uses a full MLP for ConductivityNet.
+    sigma_phi.load_state_dict(checkpoint["sigma_phi"], strict=False)
 
 
 def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
