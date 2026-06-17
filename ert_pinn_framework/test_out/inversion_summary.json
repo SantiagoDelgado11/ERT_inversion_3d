@@ -37,7 +37,6 @@
     "flux": 1.0
   },
   "observations": null,
-  "observation_fit": null,
   "source_electrode": 0,
   "sink_electrode": 1,
   "warm_start_checkpoint": "test_out\\checkpoints\\train_model.pt"

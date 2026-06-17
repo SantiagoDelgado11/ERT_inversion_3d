@@ -627,7 +627,6 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     n_interior = int(sampling_cfg.get("interior_points_per_epoch", 20000))
     n_dirichlet = int(sampling_cfg.get("dirichlet_points_per_epoch", sampling_cfg.get("boundary_points_per_face_per_epoch", 2000)))
     n_neumann_per_face = int(sampling_cfg.get("neumann_points_per_face_per_epoch", sampling_cfg.get("boundary_points_per_face_per_epoch", 2000)))
-    n_prediction = int(sampling_cfg.get("measurement_points", 512))
 
     epochs = int(run_cfg.get("epochs", 1000))
     log_every = int(run_cfg.get("log_every", 20))
@@ -842,81 +841,6 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         mode=mode,
     )
 
-    try:
-        from src.acquisition.arrays import PolePoleArray
-        geom_array = PolePoleArray(electrodes)
-        a_idx, b_idx, m_idx, n_idx = geom_array.generate_indices()
-        if a_idx.shape[0] > n_prediction:
-            perm = torch.randperm(a_idx.shape[0], device=device)[:n_prediction]
-            a_idx, b_idx, m_idx, n_idx = a_idx[perm], b_idx[perm], m_idx[perm], n_idx[perm]
-            
-        def get_pos(idx):
-            valid = torch.where(idx >= 0, idx, torch.zeros_like(idx))
-            return electrodes[valid]
-
-        m_pos, n_pos, a_pos, b_pos = get_pos(m_idx), get_pos(n_idx), get_pos(a_idx), get_pos(b_idx)
-        pred_points = torch.cat([m_pos, n_pos, a_pos, b_pos], dim=1)
-        
-        with torch.no_grad():
-            feat_m = build_potential_features(m_pos, a_pos, b_pos, rep_injection.current)
-            feat_n = build_potential_features(n_pos, a_pos, b_pos, rep_injection.current)
-            pred_u = u_theta(feat_m) - u_theta(feat_n)
-    except Exception:
-        pred_points = geometry.sample_interior(n_prediction, rng, device, dtype)
-        with torch.no_grad():
-            pred_source_center = clamp_center(electrodes[source_idx], bounds, center_margin)
-            pred_sink_center = clamp_center(electrodes[sink_idx], bounds, center_margin)
-            pred_features = build_potential_features(pred_points, pred_source_center, pred_sink_center, rep_injection.current)
-            pred_u = u_theta(pred_features)
-
-    prediction_payload = {
-        "points": pred_points.detach().cpu().numpy(),
-        "potential": pred_u.detach().cpu().numpy(),
-    }
-
-    if mode == "train":
-        np.savez(
-            output_root / "training_predictions.npz",
-            points=prediction_payload["points"],
-            potential=prediction_payload["potential"],
-        )
-    else:
-        with torch.no_grad():
-            pred_sigma = sigma_phi(pred_points)
-        prediction_payload["conductivity"] = pred_sigma.detach().cpu().numpy()
-        np.savez(output_root / "inversion_predictions.npz", **prediction_payload)
-
-    observation_fit = None
-    if obs_points is not None and obs_values is not None:
-        with torch.no_grad():
-            if obs_points.shape[1] == 12:
-                m_pos = obs_points[:, 0:3]
-                n_pos = obs_points[:, 3:6]
-                a_pos = obs_points[:, 6:9]
-                b_pos = obs_points[:, 9:12]
-                
-                feat_m = build_potential_features(m_pos, a_pos, b_pos, rep_injection.current)
-                feat_n = build_potential_features(n_pos, a_pos, b_pos, rep_injection.current)
-                obs_pred = u_theta(feat_m) - u_theta(feat_n)
-            else:
-                obs_features = build_potential_features(obs_points, pred_source_center, pred_sink_center, rep_injection.current)
-                obs_pred = u_theta(obs_features)
-        obs_true_np = obs_values.detach().cpu().numpy().reshape(-1)
-        obs_pred_np = obs_pred.detach().cpu().numpy().reshape(-1)
-        obs_points_np = obs_points.detach().cpu().numpy()
-        observation_fit = {
-            "count": int(obs_points.shape[0]),
-            "metrics": _regression_metrics(obs_true_np, obs_pred_np),
-            "predictions": str(output_root / f"{mode}_observation_fit.npz"),
-        }
-        np.savez(
-            output_root / f"{mode}_observation_fit.npz",
-            points=obs_points_np,
-            observed=obs_true_np,
-            predicted=obs_pred_np,
-            residual=obs_pred_np - obs_true_np,
-        )
-
     summary = {
         "mode": mode,
         "epochs": len(history),
@@ -927,7 +851,6 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         "weights": weight_paths,
         "loss_weights": loss_weights,
         "observations": None if obs_path is None else str(obs_path),
-        "observation_fit": observation_fit,
         "source_electrode": source_idx,
         "sink_electrode": sink_idx,
         "warm_start_checkpoint": warm_start_checkpoint,
