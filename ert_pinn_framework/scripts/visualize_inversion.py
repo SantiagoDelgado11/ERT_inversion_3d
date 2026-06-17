@@ -53,13 +53,24 @@ def create_figure(npz_path: Path, output_path: Path, title: str) -> Path:
     fig = plt.figure(figsize=(12, 5), dpi=160)
     ax3d = fig.add_subplot(1, 2, 1, projection="3d")
 
+    # Filtrar el fondo para no obstruir la vista de la anomalía interna
+    threshold = np.mean(sigma_plot) + 0.5 * np.std(sigma_plot)
+    mask = sigma_plot > threshold
+    
+    # Si por alguna razón todo es muy homogéneo, mostrar al menos los más altos
+    if not np.any(mask):
+        mask = sigma_plot > np.percentile(sigma_plot, 90)
+        
+    points_filtered = points_plot[mask]
+    sigma_filtered = sigma_plot[mask]
+
     scatter = ax3d.scatter(
-        points_plot[:, 0],
-        points_plot[:, 1],
-        points_plot[:, 2],
-        c=sigma_plot,
+        points_filtered[:, 0],
+        points_filtered[:, 1],
+        points_filtered[:, 2],
+        c=sigma_filtered,
         cmap="viridis",
-        s=10,
+        s=15,
         alpha=0.9,
         linewidths=0.0,
     )
