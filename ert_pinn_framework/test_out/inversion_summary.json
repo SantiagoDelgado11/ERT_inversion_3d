@@ -3,22 +3,22 @@
   "epochs": 2,
   "final_metrics": {
     "epoch": 2.0,
-    "data": 0.0,
+    "data": 0.00013900258636567742,
     "pde": 0.11972849071025848,
     "bc": 0.31729021668434143,
     "reg": 0.2785501182079315,
     "flux": 2023.1746826171875,
-    "total": 2021.86572265625,
+    "total": 2021.8658447265625,
     "bc_dirichlet": 0.30589672923088074,
     "bc_neumann": 0.011393493972718716,
     "sigma_mean": 0.694312572479248
   },
   "history_summary": {
     "initial_total": 2023.6593017578125,
-    "final_total": 2021.86572265625,
-    "best_total": 2021.86572265625,
-    "loss_reduction_abs": 1.7935791015625,
-    "loss_reduction_fraction": 0.0008863048735548229
+    "final_total": 2021.8658447265625,
+    "best_total": 2021.8658447265625,
+    "loss_reduction_abs": 1.79345703125,
+    "loss_reduction_fraction": 0.0008862445519817231
   },
   "loss_history": {
     "json": "test_out\\invert_loss_history.json",
@@ -29,6 +29,10 @@
     "summary": "test_out\\weights\\weights_summary_invert.json",
     "npz": "test_out\\weights\\weights_invert.npz"
   },
+  "predictions": {
+    "path": "test_out\\inversion_predictions.npz",
+    "count": 10
+  },
   "loss_weights": {
     "data": 1.0,
     "pde": 1.0,
@@ -36,8 +40,42 @@
     "reg": 1.0,
     "flux": 1.0
   },
-  "observations": null,
+  "adaptive_loss_weights": {
+    "data": 1.0020020008087158,
+    "pde": 1.0020021200180054,
+    "bc": 1.002002239227295,
+    "reg": 1.0020025968551636,
+    "flux": 0.9980020523071289
+  },
+  "effective_loss_weights": {
+    "data": 1.0020020008087158,
+    "pde": 1.0020021200180054,
+    "bc": 1.002002239227295,
+    "reg": 1.0020025968551636,
+    "flux": 0.9980020523071289
+  },
+  "observations": "C:\\Users\\Doc\\Downloads\\ERT_inversion_3d\\ert_pinn_framework\\test_out\\synthetic_observations.csv",
+  "observation_fit": {
+    "count": 10,
+    "metrics": {
+      "mse": 0.0005142345502263723,
+      "rmse": 0.022676740291020056,
+      "mae": 0.01942933425307274,
+      "relative_l2": 0.03915171118766031
+    },
+    "predictions": "test_out\\invert_observation_fit.npz"
+  },
   "source_electrode": 0,
   "sink_electrode": 1,
+  "source_center": [
+    0.5,
+    0.0,
+    0.0
+  ],
+  "sink_center": [
+    -2.1855694143368964e-08,
+    0.5,
+    0.0
+  ],
   "warm_start_checkpoint": "test_out\\checkpoints\\train_model.pt"
 }

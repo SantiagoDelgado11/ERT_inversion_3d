@@ -29,6 +29,10 @@
     "summary": "test_out\\weights\\weights_summary_train.json",
     "npz": "test_out\\weights\\weights_train.npz"
   },
+  "predictions": {
+    "path": "test_out\\training_predictions.npz",
+    "count": 10
+  },
   "loss_weights": {
     "data": 0.0,
     "pde": 1.0,
@@ -36,8 +40,29 @@
     "reg": 0.0,
     "flux": 1.0
   },
+  "adaptive_loss_weights": {
+    "pde": 1.002002239227295,
+    "bc": 1.002002239227295,
+    "flux": 0.9980020523071289
+  },
+  "effective_loss_weights": {
+    "pde": 1.002002239227295,
+    "bc": 1.002002239227295,
+    "flux": 0.9980020523071289
+  },
   "observations": null,
+  "observation_fit": null,
   "source_electrode": 0,
   "sink_electrode": 1,
+  "source_center": [
+    0.5,
+    0.0,
+    0.0
+  ],
+  "sink_center": [
+    -2.1855694143368964e-08,
+    0.5,
+    0.0
+  ],
   "warm_start_checkpoint": null
 }

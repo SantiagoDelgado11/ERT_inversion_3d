@@ -186,8 +186,8 @@ def load_observations(
     if path is None:
         return None, None
 
-    if len(point_columns) != 3:
-        raise ValueError("point_columns must contain exactly 3 indices")
+    if len(point_columns) not in (3, 12):
+        raise ValueError("point_columns must contain either 3 coordinate indices or 12 A/B/M/N coordinate indices")
 
     points_np, values_np, _ = load_observation_arrays(
         path,
@@ -314,6 +314,122 @@ def _save_weight_artifacts(
     return {
         "summary": str(summary_path),
         "npz": str(npz_path),
+    }
+
+
+def _clear_stale_artifacts(output_root: Path, mode: str) -> None:
+    """Remove mode-specific prediction artifacts before a fresh run starts."""
+    filenames = ["training_predictions.npz"] if mode == "train" else [
+        "inversion_predictions.npz",
+        "invert_observation_fit.npz",
+    ]
+    for filename in filenames:
+        artifact = output_root / filename
+        if artifact.exists():
+            artifact.unlink()
+
+
+def _predict_observation_values(
+    u_theta: PotentialNet,
+    obs_points: Tensor,
+    source_center: Tensor,
+    sink_center: Tensor,
+    current: float,
+) -> Tensor:
+    if obs_points.shape[1] == 12:
+        m_pos = obs_points[:, 0:3]
+        n_pos = obs_points[:, 3:6]
+        a_pos = obs_points[:, 6:9]
+        b_pos = obs_points[:, 9:12]
+
+        feat_m = build_potential_features(m_pos, a_pos, b_pos, current)
+        feat_n = build_potential_features(n_pos, a_pos, b_pos, current)
+        return u_theta(feat_m) - u_theta(feat_n)
+
+    if obs_points.shape[1] != 3:
+        raise ValueError(f"Observation points must have shape (N, 3) or (N, 12); got {tuple(obs_points.shape)}")
+
+    features_obs = build_potential_features(obs_points, source_center, sink_center, current)
+    return u_theta(features_obs)
+
+
+def _save_prediction_artifacts(
+    u_theta: PotentialNet,
+    sigma_phi: nn.Module,
+    *,
+    bounds: dict[str, tuple[float, float]],
+    n_points: int,
+    rng: np.random.Generator,
+    source_center: Tensor,
+    sink_center: Tensor,
+    current: float,
+    output_root: Path,
+    mode: str,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> dict[str, str | int]:
+    if n_points <= 0:
+        raise ValueError("sampling.measurement_points must be > 0 to save prediction artifacts")
+
+    points = sample_uniform(bounds, n_points, rng, device, dtype)
+    with torch.no_grad():
+        features = build_potential_features(points, source_center, sink_center, current)
+        potential = u_theta(features)
+        conductivity = sigma_phi(points)
+
+    filename = "training_predictions.npz" if mode == "train" else "inversion_predictions.npz"
+    path = output_root / filename
+    np.savez_compressed(
+        path,
+        points=points.detach().cpu().numpy(),
+        potential=potential.detach().cpu().numpy(),
+        conductivity=conductivity.detach().cpu().numpy(),
+    )
+    return {
+        "path": str(path),
+        "count": int(points.shape[0]),
+    }
+
+
+def _save_observation_fit(
+    u_theta: PotentialNet,
+    *,
+    obs_points: Tensor | None,
+    obs_values: Tensor | None,
+    source_center: Tensor,
+    sink_center: Tensor,
+    current: float,
+    output_root: Path,
+) -> dict[str, object] | None:
+    if obs_points is None or obs_values is None:
+        return None
+
+    with torch.no_grad():
+        predicted = _predict_observation_values(
+            u_theta,
+            obs_points,
+            source_center,
+            sink_center,
+            current,
+        )
+
+    observed_np = obs_values.detach().cpu().numpy().reshape(-1)
+    predicted_np = predicted.detach().cpu().numpy().reshape(-1)
+    points_np = obs_points.detach().cpu().numpy()
+    residual_np = predicted_np - observed_np
+
+    path = output_root / "invert_observation_fit.npz"
+    np.savez_compressed(
+        path,
+        points=points_np,
+        observed=observed_np,
+        predicted=predicted_np,
+        residual=residual_np,
+    )
+    return {
+        "count": int(points_np.shape[0]),
+        "metrics": _regression_metrics(observed_np, predicted_np),
+        "predictions": str(path),
     }
 
 
@@ -465,24 +581,14 @@ def compute_losses(
     if obs_points is None or obs_values is None:
         loss_data = torch.zeros((), device=device, dtype=dtype)
     else:
-        if obs_points.shape[1] == 12:
-            m_pos = obs_points[:, 0:3]
-            n_pos = obs_points[:, 3:6]
-            a_pos = obs_points[:, 6:9]
-            b_pos = obs_points[:, 9:12]
-            
-            feat_m = build_potential_features(m_pos, a_pos, b_pos, current)
-            v_pred_m = u_theta(feat_m)
-            
-            feat_n = build_potential_features(n_pos, a_pos, b_pos, current)
-            v_pred_n = u_theta(feat_n)
-            
-            dv_pred = v_pred_m - v_pred_n
-            loss_data = torch.mean((dv_pred - obs_values.view(-1, 1)) ** 2)
-        else:
-            features_obs = build_potential_features(obs_points, source_center, sink_center, current)
-            u_data = u_theta(features_obs)
-            loss_data = torch.mean((u_data - obs_values.view(-1, 1)) ** 2)
+        predicted_obs = _predict_observation_values(
+            u_theta,
+            obs_points,
+            source_center,
+            sink_center,
+            current,
+        )
+        loss_data = torch.mean((predicted_obs - obs_values.view(-1, 1)) ** 2)
 
     loss_total = (
         float(w_data) * loss_data
@@ -509,13 +615,18 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     if mode not in {"train", "invert"}:
         raise ValueError(f"Unsupported mode: {mode}")
 
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    _clear_stale_artifacts(output_root, mode)
+
     base_cfg = config["base"]
     data_cfg = config["data"]
     model_cfg = config["model"].get("model", config["model"])
     inverse_cfg = config["inverse"].get("inversion", config["inverse"])
     potential_cfg = model_cfg.get("potential", model_cfg)
     conductivity_cfg = inverse_cfg.get("conductivity", inverse_cfg)
-    training_cfg = config["training"].get("training", config["training"])
+    training_root_cfg = config["training"]
+    training_cfg = training_root_cfg.get("training", training_root_cfg)
     electrodes_cfg = config["electrodes"].get("electrodes", config["electrodes"])
 
     project_cfg = base_cfg.get("project", {})
@@ -569,8 +680,9 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     else:
         sigma_phi = sigma_phi_base
 
-    optimizer_cfg = config["training"].get("optimizer", {}) if mode == "train" else inverse_cfg.get("optimizer", {})
-    run_cfg = config.get("training", {}) if mode == "train" else config.get("inverse", {})
+    training_optimizer_cfg = training_root_cfg.get("optimizer", training_cfg.get("optimizer", {}))
+    optimizer_cfg = training_optimizer_cfg if mode == "train" else inverse_cfg.get("optimizer", {})
+    run_cfg = training_cfg if mode == "train" else inverse_cfg
     loss_weights_cfg = run_cfg.get("loss_weights", {}) if isinstance(run_cfg.get("loss_weights", {}), dict) else {}
     if mode == "train":
         loss_weights = {
@@ -655,6 +767,8 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
     rep_injection = injection_schedule.injections[0]
     source_idx = rep_injection.source_idx
     sink_idx = rep_injection.sink_idx
+    rep_source_center = clamp_center(electrodes[source_idx], bounds, center_margin)
+    rep_sink_center = clamp_center(electrodes[sink_idx], bounds, center_margin)
 
     bc_cfg = inverse_cfg.get("boundary_conditions", {})
     dirichlet_face = str(bc_cfg.get("dirichlet_face", "z_max"))
@@ -724,6 +838,17 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             npz_value_key=obs_npz_value_key,
             drop_invalid_rows=obs_drop_invalid_rows,
         )
+        if obs_points is None or obs_values is None:
+            if not bool(inverse_cfg.get("allow_missing_observations", False)):
+                raise ValueError(
+                    "Inversion requires observations.path. Set inversion.allow_missing_observations=true "
+                    "only for physics-only debugging runs."
+                )
+        elif obs_points.shape[1] == 3 and len(injection_schedule) != 1:
+            raise ValueError(
+                "Three-column observations are tied to one source/sink pair. "
+                "Use exactly one injection or provide 12-column A/B/M/N observations."
+            )
     else:
         obs_path = None
         obs_points = None
@@ -775,7 +900,12 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             dtype=dtype,
         )
 
-        loss_total = weighter(loss_components)
+        weighted_components = {
+            key: loss_components[key] * float(loss_weights[key])
+            for key in active_keys
+            if key in loss_components
+        }
+        loss_total = weighter(weighted_components)
 
         if not torch.isfinite(loss_total):
             raise RuntimeError(f"Non-finite loss at epoch {epoch}")
@@ -797,6 +927,7 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
             wandb_log = {"epoch": epoch, "loss_total": loss_total.item(), "grad_norm": grad_norm}
             for k in active_keys:
                 wandb_log[f"loss_{k}"] = loss_components[k].item()
+                wandb_log[f"configured_weight_{k}"] = loss_weights[k]
             wandb_log.update({f"weight_{k}": w for k, w in weighter.get_weights().items()})
             wandb.log(wandb_log)
 
@@ -813,8 +944,6 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
                 )
             )
 
-    output_root = Path(output_root)
-    output_root.mkdir(parents=True, exist_ok=True)
     checkpoints_dir = output_root / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
@@ -840,6 +969,34 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         output_root=output_root,
         mode=mode,
     )
+    prediction_paths = _save_prediction_artifacts(
+        u_theta=u_theta,
+        sigma_phi=sigma_phi,
+        bounds=bounds,
+        n_points=int(sampling_cfg.get("measurement_points", 512)),
+        rng=np.random.default_rng(seed + 1000 + (0 if mode == "train" else 1)),
+        source_center=rep_source_center,
+        sink_center=rep_sink_center,
+        current=rep_injection.current,
+        output_root=output_root,
+        mode=mode,
+        device=device,
+        dtype=dtype,
+    )
+    observation_fit = _save_observation_fit(
+        u_theta,
+        obs_points=obs_points,
+        obs_values=obs_values,
+        source_center=rep_source_center,
+        sink_center=rep_sink_center,
+        current=rep_injection.current,
+        output_root=output_root,
+    ) if mode == "invert" else None
+    adaptive_loss_weights = weighter.get_weights()
+    effective_loss_weights = {
+        key: float(loss_weights[key]) * float(adaptive_loss_weights.get(key, 1.0))
+        for key in active_keys
+    }
 
     summary = {
         "mode": mode,
@@ -849,10 +1006,16 @@ def run_minimal_inverse(config: dict, output_root: Path, mode: str = "invert") -
         "loss_history": history_paths,
         "checkpoint": str(checkpoint_path),
         "weights": weight_paths,
+        "predictions": prediction_paths,
         "loss_weights": loss_weights,
+        "adaptive_loss_weights": adaptive_loss_weights,
+        "effective_loss_weights": effective_loss_weights,
         "observations": None if obs_path is None else str(obs_path),
+        "observation_fit": observation_fit,
         "source_electrode": source_idx,
         "sink_electrode": sink_idx,
+        "source_center": [float(v) for v in rep_source_center.detach().cpu().tolist()],
+        "sink_center": [float(v) for v in rep_sink_center.detach().cpu().tolist()],
         "warm_start_checkpoint": warm_start_checkpoint,
     }
 
