@@ -65,9 +65,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--observations-point-columns",
         type=int,
-        nargs=3,
+        nargs="+",
         default=None,
-        help="Positional columns for the x, y and z coordinates",
+        help="Positional columns for the x,y,z coordinates (3 or 12 columns)",
     )
     parser.add_argument(
         "--observations-value-column",
