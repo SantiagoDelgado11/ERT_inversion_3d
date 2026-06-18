@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.experiments.runner import load_project_config
-from src.experiments.visual_simulation import apply_runtime_overrides, build_synthetic_observations
+from src.experiments.visual_simulation import apply_runtime_overrides, build_ert_array_observations
 from src.main import run_minimal_inverse
 from src.utils.io import save_json
 
@@ -178,9 +178,9 @@ def main() -> None:
 
     training_summary = run_minimal_inverse(config=config, output_root=base_training_root, mode="train")
 
-    training_predictions_path = base_training_root / "training_predictions.npz"
-    if not training_predictions_path.exists():
-        raise FileNotFoundError(f"Training predictions not found: {training_predictions_path}")
+    train_checkpoint = base_training_root / "checkpoints" / "train_model.pt"
+    if not train_checkpoint.exists():
+        raise FileNotFoundError(f"Training checkpoint not found: {train_checkpoint}")
 
     base_seed = int(config["base"].get("project", {}).get("seed", 42))
     scenarios: list[dict[str, Any]] = []
@@ -201,8 +201,9 @@ def main() -> None:
                 scenario_root.mkdir(parents=True, exist_ok=True)
 
                 observations_path = scenario_root / "synthetic_observations.csv"
-                observations_info = build_synthetic_observations(
-                    training_predictions_path=training_predictions_path,
+                observations_info = build_ert_array_observations(
+                    config=config,
+                    checkpoint_path=train_checkpoint,
                     output_csv_path=observations_path,
                     observation_count=int(observation_count),
                     noise_std=float(noise_std),
@@ -217,8 +218,8 @@ def main() -> None:
                 obs_cfg["path"] = _safe_rel_path(observations_path, project_root)
                 obs_cfg["delimiter"] = ","
                 obs_cfg["skiprows"] = 1
-                obs_cfg["point_columns"] = [0, 1, 2]
-                obs_cfg["value_column"] = 3
+                obs_cfg["point_columns"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+                obs_cfg["value_column"] = 12
 
                 inversion_summary = run_minimal_inverse(config=scenario_config, output_root=scenario_root, mode="invert")
 
@@ -234,7 +235,7 @@ def main() -> None:
                     "observations": observations_info,
                     "training_source": {
                         "root": str(base_training_root),
-                        "predictions": str(training_predictions_path),
+                        "predictions": str(train_checkpoint),
                     },
                     "inversion": inversion_summary,
                     "inversion_observation_fit": fit_metrics,

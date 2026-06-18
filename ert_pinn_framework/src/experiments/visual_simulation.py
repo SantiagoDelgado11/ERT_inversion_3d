@@ -15,6 +15,11 @@ import matplotlib.pyplot as plt
 from ..main import run_minimal_inverse
 from ..utils.io import save_json
 from .runner import load_project_config
+import torch
+from ..models.pinn.electric_potential_network import PotentialNet
+from ..models.pinn.features import build_potential_features
+from ..acquisition.electrodes import build_circular_electrodes
+from ..acquisition.schedule import InjectionSchedule
 
 
 def _section(config: dict[str, Any], key: str) -> dict[str, Any]:
@@ -191,6 +196,100 @@ def build_synthetic_observations(
     return {
         "path": str(output_csv_path),
         "count": int(points.shape[0]),
+        "noise_std": float(noise_std),
+    }
+
+
+def get_ert_array_table(config: dict[str, Any], checkpoint_path: Path) -> np.ndarray:
+    """Generate the true ERT array table (M, N, A, B, delta_V) from a trained PINN."""
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    electrodes_cfg = config.get("electrodes", {}).get("electrodes", config.get("electrodes", {}))
+    electrode_count = int(electrodes_cfg.get("count", 16))
+    electrode_radius = float(electrodes_cfg.get("radius", 1.0))
+    electrode_z = float(electrodes_cfg.get("z", 0.0))
+    
+    device = torch.device("cpu")
+    dtype = torch.float64 if str(config.get("base", {}).get("runtime", {}).get("dtype", "float32")).lower() == "float64" else torch.float32
+    electrodes = build_circular_electrodes(electrode_count, electrode_radius, electrode_z, device, dtype)
+
+    model_cfg = _section(config["model"], "model")
+    potential_cfg = _section(model_cfg, "potential")
+    u_theta = PotentialNet(
+        input_dim=int(potential_cfg.get("input_dim", 3)),
+        hidden_dim=int(potential_cfg.get("hidden_dim", 128)),
+        hidden_layers=int(potential_cfg.get("num_hidden_layers", 6)),
+        activation=str(potential_cfg.get("activation", "tanh")),
+    ).to(device=device, dtype=dtype)
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    u_theta.load_state_dict(checkpoint["u_theta"])
+    u_theta.eval()
+
+    rows = []
+    with torch.no_grad():
+        for i_src in range(electrode_count):
+            for i_snk in range(electrode_count):
+                if i_src == i_snk:
+                    continue
+                src_pos = electrodes[i_src].unsqueeze(0)
+                snk_pos = electrodes[i_snk].unsqueeze(0)
+                
+                for i_m in range(electrode_count):
+                    if i_m in (i_src, i_snk):
+                        continue
+                    m_pos = electrodes[i_m].unsqueeze(0)
+                    feat_m = build_potential_features(m_pos, src_pos, snk_pos, 1.0)
+                    pot_m = u_theta(feat_m).item()
+                    
+                    for i_n in range(electrode_count):
+                        if i_n in (i_src, i_snk, i_m):
+                            continue
+                        n_pos = electrodes[i_n].unsqueeze(0)
+                        feat_n = build_potential_features(n_pos, src_pos, snk_pos, 1.0)
+                        pot_n = u_theta(feat_n).item()
+                        
+                        delta_v = pot_m - pot_n
+                        rows.append(torch.cat([electrodes[i_m], electrodes[i_n], electrodes[i_src], electrodes[i_snk], torch.tensor([delta_v], device=device, dtype=dtype)]).numpy())
+
+    return np.array(rows, dtype=np.float64)
+
+
+def build_ert_array_observations(
+    config: dict[str, Any],
+    checkpoint_path: Path,
+    output_csv_path: Path,
+    *,
+    observation_count: int,
+    noise_std: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Sample true ERT array potential differences from a trained forward PINN."""
+    table = get_ert_array_table(config, checkpoint_path)
+
+
+    
+    rng = np.random.default_rng(seed)
+    if 0 < observation_count < table.shape[0]:
+        idx = rng.choice(table.shape[0], size=observation_count, replace=False)
+        table = table[idx]
+        
+    if noise_std > 0.0:
+        table[:, -1] += rng.normal(loc=0.0, scale=float(noise_std), size=table.shape[0])
+
+    output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savetxt(
+        output_csv_path,
+        table,
+        delimiter=",",
+        header="m_x,m_y,m_z,n_x,n_y,n_z,a_x,a_y,a_z,b_x,b_y,b_z,potential",
+        comments="# ",
+    )
+
+    return {
+        "path": str(output_csv_path),
+        "count": int(table.shape[0]),
         "noise_std": float(noise_std),
     }
 
@@ -526,8 +625,11 @@ def run_visual_inversion_simulation(
 
     project_seed = int(config["base"].get("project", {}).get("seed", 42))
     observations_path = output_root / "synthetic_visual_observations.csv"
-    observations = build_synthetic_observations(
-        training_predictions_path,
+    train_checkpoint = output_root / "checkpoints" / "train_model.pt"
+    
+    observations = build_ert_array_observations(
+        config,
+        train_checkpoint,
         observations_path,
         observation_count=int(observation_count),
         noise_std=float(noise_std),
@@ -539,8 +641,8 @@ def run_visual_inversion_simulation(
     obs_cfg["path"] = _safe_rel_path(observations_path, project_root)
     obs_cfg["delimiter"] = ","
     obs_cfg["skiprows"] = 1
-    obs_cfg["point_columns"] = [0, 1, 2]
-    obs_cfg["value_column"] = 3
+    obs_cfg["point_columns"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    obs_cfg["value_column"] = 12
 
     inversion_summary = run_minimal_inverse(config=config, output_root=output_root, mode="invert")
     visualization = create_visualization_suite(output_root, title=title)

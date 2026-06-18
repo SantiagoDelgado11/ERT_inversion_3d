@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.experiments.runner import load_project_config
-from src.experiments.visual_simulation import apply_runtime_overrides
+from src.experiments.visual_simulation import apply_runtime_overrides, get_ert_array_table
 from src.main import run_minimal_inverse
 from src.utils.io import save_json
 
@@ -199,26 +199,7 @@ def _split_arrays(
     }
 
 
-def _load_candidate_pool(predictions_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-    if not predictions_path.exists():
-        raise FileNotFoundError(f"Training predictions not found: {predictions_path}")
 
-    data = np.load(predictions_path)
-    if "points" not in data.files or "potential" not in data.files:
-        raise KeyError(f"Expected points and potential in {predictions_path}; got {data.files}")
-
-    points = np.asarray(data["points"], dtype=np.float64)
-    potential = np.asarray(data["potential"], dtype=np.float64).reshape(-1)
-    conductivity = np.asarray(data["conductivity"], dtype=np.float64).reshape(-1) if "conductivity" in data.files else None
-
-    if points.ndim != 2 or points.shape[1] != 3:
-        raise ValueError(f"Expected point array with shape (N, 3) in {predictions_path}; got {points.shape}")
-    if points.shape[0] != potential.shape[0]:
-        raise ValueError("Point and potential arrays must have the same number of rows")
-    if conductivity is not None and conductivity.shape[0] != points.shape[0]:
-        raise ValueError("Point and conductivity arrays must have the same number of rows")
-
-    return points, potential, conductivity
 
 
 def main() -> None:
@@ -247,13 +228,18 @@ def main() -> None:
     training_summary: dict[str, Any] | None = None
     if args.training_predictions_path is None:
         training_summary = run_minimal_inverse(config=config, output_root=forward_root, mode="train")
-        predictions_path = forward_root / "training_predictions.npz"
+        checkpoint_path = forward_root / "checkpoints" / "train_model.pt"
     else:
-        predictions_path = Path(args.training_predictions_path)
-        if not predictions_path.is_absolute():
-            predictions_path = project_root / predictions_path
+        # Repurpose training_predictions_path to point to train_model.pt directly, 
+        # or assume it's in the same checkpoints/ structure. We'll try to resolve it.
+        checkpoint_path = Path(args.training_predictions_path)
+        if not checkpoint_path.is_absolute():
+            checkpoint_path = project_root / checkpoint_path
 
-    points, clean_potential, conductivity = _load_candidate_pool(predictions_path)
+    table = get_ert_array_table(config, checkpoint_path)
+    points = table[:, :12]
+    clean_potential = table[:, 12]
+    conductivity = None
 
     candidate_size = int(points.shape[0]) if args.dataset_size <= 0 else min(int(args.dataset_size), int(points.shape[0]))
     base_seed = int(config["base"].get("project", {}).get("seed", 42))
@@ -350,7 +336,7 @@ def main() -> None:
         "title": args.title,
         "output_root": str(output_root),
         "dataset_root": str(dataset_root),
-        "candidate_pool_path": _safe_rel_path(predictions_path, project_root),
+        "candidate_pool_path": _safe_rel_path(checkpoint_path, project_root),
         "forward_root": str(forward_root),
         "forward_training": training_summary,
         "dataset_size": int(candidate_size),
