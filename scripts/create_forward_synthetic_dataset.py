@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "ert_pinn_framework" / "scripts" / "create_forward_synthetic_dataset.py"
+TARGET = ROOT / "ert_pinn_framework" / "scripts" / "forward" / "create_forward_synthetic_dataset.py"
 
 
 if __name__ == "__main__":
