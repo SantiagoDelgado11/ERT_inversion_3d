@@ -1,0 +1,18 @@
+mesh:
+  # Base cell sizes in meters
+  hx: 2.0
+  hy: 2.0
+  hz: 2.0
+
+  # Number of core cells
+  nx: 50  # 100 meters
+  ny: 20  # 40 meters
+  nz: 20  # 40 meters depth
+
+  # Padding cells to push boundaries to infinity
+  pad_x: 7
+  pad_y: 7
+  pad_z: 7
+
+  # Expansion factor for padding cells
+  expansion_rate: 1.3

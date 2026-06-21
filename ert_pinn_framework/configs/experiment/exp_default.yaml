@@ -1,7 +1,0 @@
-experiment:
-  name: exp_default
-  mode: train_then_invert
-
-  notes: |
-    Default experiment for 3D ERT PINN framework.
-    Supports forward training and inverse conductivity estimation.

@@ -1,0 +1,22 @@
+geology:
+  # Background resistivity in Ohm-m (can be a fixed value or a range [min, max])
+  background_resistivity: [50.0, 200.0]
+
+  # Anomaly settings
+  max_anomalies: 3
+
+  # Ranges for anomalies
+  resistivity_range: [1.0, 1000.0]  # Ohm-m (bounded to avoid ill-conditioned matrices)
+
+  sphere:
+    radius_range: [2.0, 15.0]
+  
+  ellipsoid:
+    rx_range: [2.0, 15.0]
+    ry_range: [2.0, 15.0]
+    rz_range: [2.0, 15.0]
+  
+  block:
+    dx_range: [4.0, 30.0]
+    dy_range: [4.0, 30.0]
+    dz_range: [4.0, 30.0]

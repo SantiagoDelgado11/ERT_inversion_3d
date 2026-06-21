@@ -1,0 +1,24 @@
+survey:
+  # Gaussian source approximation parameter
+  # Controls the spread of the injected current to avoid numerical singularities
+  # A good rule of thumb is 1-2 times the cell size adjacent to the electrode.
+  epsilon: 2.5
+
+  # Base survey line configuration
+  electrode_spacing: 2.0  # meters
+  num_electrodes: 41      # 80 meters total length (if placed at origin to 80)
+  
+  # Arrays to generate sequences for
+  # Supported: wenner, schlumberger, dipole-dipole, pole-dipole
+  arrays:
+    wenner:
+      active: true
+    schlumberger:
+      active: true
+    dipole_dipole:
+      active: true
+      max_n: 8
+    pole_dipole:
+      active: true
+      max_n: 8
+      pole_distance: 1000.0  # Distance to infinity pole in meters
