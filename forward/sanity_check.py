@@ -25,6 +25,68 @@ def main():
     
     print(f"Generated {len(measurements)} measurements.")
     
+    # === DEBUG INFO START ===
+    print("\n--- DEBUG INFO ---")
+    
+    with open("configs/mesh.yaml", 'r') as f:
+        mesh_config = yaml.safe_load(f)['mesh']
+    
+    pad_x = mesh_config['pad_x']
+    nx = mesh_config['nx']
+    pad_y = mesh_config['pad_y']
+    ny = mesh_config['ny']
+    
+    core_x_min = mesh.nodes_x[pad_x]
+    core_x_max = mesh.nodes_x[pad_x + nx]
+    core_y_min = mesh.nodes_y[pad_y]
+    core_y_max = mesh.nodes_y[pad_y + ny]
+    
+    print(f"Límites de la Malla (Core X): {core_x_min:.2f} a {core_x_max:.2f}")
+    print(f"Límites de la Malla (Core Y): {core_y_min:.2f} a {core_y_max:.2f}")
+    
+    electrodes = sample['electrodes']
+    elec_x_min = electrodes[:, 0].min()
+    elec_x_max = electrodes[:, 0].max()
+    print(f"Límites de los Electrodos (X): {elec_x_min:.2f} a {elec_x_max:.2f}")
+    
+    array_center = (elec_x_min + elec_x_max) / 2.0
+    print(f"Centro del Arreglo (X): {array_center:.2f}")
+    
+    sources = set()
+    for m in measurements:
+        sources.add((m['A'], m['B']))
+    num_sources = len(sources)
+    avg_receivers = len(measurements) / num_sources if num_sources > 0 else 0
+    print(f"Longitud de la Secuencia: {num_sources} fuentes en total, {avg_receivers:.2f} receptores promedio por fuente")
+    
+    a_vals = []
+    n_vals = []
+    
+    for m in measurements:
+        pos_A = electrodes[m['A']]
+        pos_B = electrodes[m['B']] if m['B'] != -1 else pos_A + np.array([1000,0,0])
+        pos_M = electrodes[m['M']]
+        pos_N = electrodes[m['N']]
+        
+        a = abs(pos_M[0] - pos_N[0])
+        a_vals.append(a)
+        
+        dist_AM = abs(pos_A[0] - pos_M[0])
+        dist_AN = abs(pos_A[0] - pos_N[0])
+        dist_BM = abs(pos_B[0] - pos_M[0])
+        dist_BN = abs(pos_B[0] - pos_N[0])
+        
+        min_dist = min(dist_AM, dist_AN, dist_BM, dist_BN)
+        
+        if a > 0:
+            n_vals.append(min_dist / a)
+            
+    if a_vals and n_vals:
+        print(f"Distancia 'a' (min-max): {min(a_vals):.2f} a {max(a_vals):.2f}")
+        print(f"Nivel 'n' aprox (min-max): {min(n_vals):.2f} a {max(n_vals):.2f}")
+    print("------------------\n")
+    # === DEBUG INFO END ===
+    
     # 3. Simple QC Plots
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
     
