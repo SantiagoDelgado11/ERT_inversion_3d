@@ -6,6 +6,7 @@ from tqdm import tqdm
 import os
 import yaml
 from mesh.mesh_generator import generate_mesh
+import gc
 
 def worker(seed):
     try:
@@ -29,12 +30,15 @@ def worker(seed):
     except Exception as e:
         print(f"Error in worker {seed}: {e}")
         return None
+    finally:
+        # Force garbage collection to prevent memory leaks from SimPEG matrices
+        gc.collect()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate ERT 3D Dataset")
     parser.add_argument("--samples", type=int, default=10, help="Number of samples to generate")
     parser.add_argument("--batch_size", type=int, default=10, help="Batch size for saving checkpoints")
-    parser.add_argument("--cores", type=int, default=mp.cpu_count(), help="Number of CPU cores to use")
+    parser.add_argument("--cores", type=int, default=4, help="Number of CPU cores to use")
     parser.add_argument("--output", type=str, default="dataset.h5", help="Output HDF5 file")
     parser.add_argument("--seed_offset", type=int, default=0, help="Offset for random seeds to avoid duplicates across runs")
     
@@ -50,7 +54,9 @@ if __name__ == "__main__":
     seeds = [args.seed_offset + i for i in range(args.samples)]
     batch = []
     
-    with mp.Pool(processes=args.cores) as pool:
+    # Using maxtasksperchild=1 forces Python to kill and restart the worker process
+    # after every task, releasing all RAM memory entirely back to the OS.
+    with mp.Pool(processes=args.cores, maxtasksperchild=1) as pool:
         for sample in tqdm(pool.imap_unordered(worker, seeds), total=args.samples):
             if sample is not None:
                 batch.append(sample)

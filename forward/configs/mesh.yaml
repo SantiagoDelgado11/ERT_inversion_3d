@@ -10,9 +10,9 @@ mesh:
   nz: 20  # 40 meters depth
 
   # Padding cells to push boundaries to infinity
-  pad_x: 7
-  pad_y: 7
-  pad_z: 7
+  pad_x: 5
+  pad_y: 5
+  pad_z: 5
 
   # Expansion factor for padding cells
-  expansion_rate: 1.3
+  expansion_rate: 1.5

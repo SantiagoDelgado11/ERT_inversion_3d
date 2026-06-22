@@ -27,13 +27,13 @@ def solve_forward(mesh, sigma, source_pairs, electrodes, config_path="configs/su
     
     U = []
     
-    # Pre-factor the matrix for faster multiple right-hand sides
-    # using pardiso if available, or just spla.factorized
-    try:
-        from pypardiso import factorized
-        solve = factorized(A)
-    except ImportError:
-        solve = spla.factorized(A.tocsc())
+    # Use an iterative solver (BiCGSTAB) with a Jacobi preconditioner to save RAM
+    import scipy.sparse as sparse
+    
+    A_csc = A.tocsc()
+    diag_A = A_csc.diagonal()
+    diag_A[diag_A == 0] = 1.0 # Prevent division by zero
+    M = sparse.diags(1.0 / diag_A)
     
     for (A_idx, B_idx) in source_pairs:
         # Construct q vector
@@ -54,8 +54,11 @@ def solve_forward(mesh, sigma, source_pairs, electrodes, config_path="configs/su
             q_B = q_B / np.sum(q_B) * I
             q -= q_B
             
-        # Solve A * u = q
-        u = solve(q)
+        # Solve A * u = q iteratively
+        u, info = spla.bicgstab(A_csc, q, M=M, rtol=1e-5)
+        if info != 0:
+            print(f"Warning: BiCGSTAB did not converge (info={info}) for source pair {A_idx}-{B_idx}")
+            
         U.append(u)
         
     return U

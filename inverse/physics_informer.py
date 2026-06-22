@@ -1,147 +1,173 @@
 import torch
-import math
+import torch.autograd as autograd
 
 class PhysicsInformer:
     """
-    Differential calculation engine and loss tensor definition for 3D ERT PINN.
+    Motor Diferencial para la evaluación de residuos físicos y regularización en la PINN.
     """
-    def __init__(self, u_net, sigma_net, epsilon=0.1, beta=1e-3):
-        self.u_net = u_net
-        self.sigma_net = sigma_net
-        self.epsilon = epsilon
-        self.beta = beta
+    def __init__(self, cond_net, pot_net):
+        self.cond_net = cond_net
+        self.pot_net = pot_net
+
+    def compute_derivatives(self, coords, source_coords=None):
+        """
+        Extrae las derivadas espaciales usando autograd.grad con create_graph=True
+        para permitir retropropagación sobre derivadas.
+        coords: (batch_size, 3) - requiere requires_grad=True internamente.
+        """
+        coords.requires_grad_(True)
         
-    def _grad(self, y, x):
-        """
-        Compute the first order Jacobian (gradient) of y with respect to x.
-        x must have requires_grad=True.
-        """
-        return torch.autograd.grad(
-            outputs=y,
-            inputs=x,
-            grad_outputs=torch.ones_like(y),
+        # Forward pass: Conductividad
+        sigma = self.cond_net(coords)
+        
+        # Forward pass: Potencial (si se proporcionan fuentes)
+        if source_coords is not None:
+            u = self.pot_net(coords, source_coords)
+        else:
+            u = None
+        
+        # 1. Gradiente de conductividad: nabla(sigma)
+        grad_sigma = autograd.grad(
+            outputs=sigma, 
+            inputs=coords, 
+            grad_outputs=torch.ones_like(sigma),
             create_graph=True,
-            retain_graph=True,
-            only_inputs=True
+            retain_graph=True
         )[0]
-        
-    def _laplacian_and_grad(self, y, x):
-        """
-        Compute the Laplacian (trace of Hessian) and the gradient of y with respect to x.
-        """
-        grad_y = self._grad(y, x)
-        laplacian = torch.zeros_like(y)
-        
-        # Iterate over spatial dimensions (x, y, z)
-        for d in range(x.shape[1]):
-            grad_y_d = grad_y[:, d:d+1]
-            grad_grad_y_d = self._grad(grad_y_d, x)
-            laplacian += grad_grad_y_d[:, d:d+1]
+        ds_dx, ds_dy, ds_dz = grad_sigma[:, 0:1], grad_sigma[:, 1:2], grad_sigma[:, 2:3]
+
+        if u is not None:
+            # 2. Gradiente del potencial: nabla(u)
+            grad_u = autograd.grad(
+                outputs=u,
+                inputs=coords,
+                grad_outputs=torch.ones_like(u),
+                create_graph=True,
+                retain_graph=True
+            )[0]
+            du_dx, du_dy, du_dz = grad_u[:, 0:1], grad_u[:, 1:2], grad_u[:, 2:3]
             
-        return laplacian, grad_y
-
-    def source_term(self, r, r_A, r_B, I):
-        """
-        Compute the regularized dipole source q(r).
-        Args:
-            r: Coordinates (N, 3)
-            r_A: Current injection electrode position (N, 3) or (1, 3)
-            r_B: Current extraction electrode position (N, 3) or (1, 3)
-            I: Current intensity
-        """
-        def delta_epsilon(r_eval, r_0):
-            norm_sq = torch.sum((r_eval - r_0)**2, dim=1, keepdim=True)
-            coeff = 1.0 / ( (self.epsilon * math.sqrt(math.pi))**3 )
-            return coeff * torch.exp(-norm_sq / (self.epsilon**2))
+            # 3. Laplaciano (segundas derivadas): nabla^2(u)
+            d2u_dx2 = autograd.grad(
+                outputs=du_dx, inputs=coords, grad_outputs=torch.ones_like(du_dx), create_graph=True, retain_graph=True
+            )[0][:, 0:1]
+            d2u_dy2 = autograd.grad(
+                outputs=du_dy, inputs=coords, grad_outputs=torch.ones_like(du_dy), create_graph=True, retain_graph=True
+            )[0][:, 1:2]
+            d2u_dz2 = autograd.grad(
+                outputs=du_dz, inputs=coords, grad_outputs=torch.ones_like(du_dz), create_graph=True, retain_graph=True
+            )[0][:, 2:3]
             
-        q = I * (delta_epsilon(r, r_A) - delta_epsilon(r, r_B))
-        return q
+            return {
+                'sigma': sigma, 'u': u,
+                'ds_dx': ds_dx, 'ds_dy': ds_dy, 'ds_dz': ds_dz,
+                'du_dx': du_dx, 'du_dy': du_dy, 'du_dz': du_dz,
+                'd2u_dx2': d2u_dx2, 'd2u_dy2': d2u_dy2, 'd2u_dz2': d2u_dz2
+            }
+        else:
+            return {
+                'sigma': sigma,
+                'ds_dx': ds_dx, 'ds_dy': ds_dy, 'ds_dz': ds_dz
+            }
 
-    def pde_residual(self, r, r_A, r_B, I):
+    def _gaussian_source(self, coords, source_pos, I, epsilon):
         """
-        Compute the PDE residual r_PDE(r).
+        Aproxima una carga puntual (delta de Dirac) mediante una Gaussiana.
         """
-        sigma = self.sigma_net(r)
-        u = self.u_net(r)
+        dist_sq = torch.sum((coords - source_pos)**2, dim=1, keepdim=True)
+        coeff = 1.0 / ((torch.sqrt(torch.tensor(torch.pi)) * epsilon)**3)
+        return I * coeff * torch.exp(-dist_sq / (epsilon**2))
+
+    def compute_pde_loss(self, coords, source_coords, I, epsilon):
+        """
+        Evalúa el residual de la PDE (Ecuación de Poisson):
+        nabla . (sigma * nabla(u)) - q = 0
+        """
+        derivs = self.compute_derivatives(coords, source_coords)
         
-        grad_sigma = self._grad(sigma, r)
-        laplacian_u, grad_u = self._laplacian_and_grad(u, r)
+        sigma = derivs['sigma']
+        ds_dx, ds_dy, ds_dz = derivs['ds_dx'], derivs['ds_dy'], derivs['ds_dz']
+        du_dx, du_dy, du_dz = derivs['du_dx'], derivs['du_dy'], derivs['du_dz']
+        d2u_dx2, d2u_dy2, d2u_dz2 = derivs['d2u_dx2'], derivs['d2u_dy2'], derivs['d2u_dz2']
         
-        # Dot product: \nabla \sigma \cdot \nabla u
-        grad_dot = torch.sum(grad_sigma * grad_u, dim=1, keepdim=True)
+        # Laplaciano de u
+        laplace_u = d2u_dx2 + d2u_dy2 + d2u_dz2
+        # Producto punto nabla(sigma) . nabla(u)
+        grad_s_dot_grad_u = ds_dx * du_dx + ds_dy * du_dy + ds_dz * du_dz
         
-        q = self.source_term(r, r_A, r_B, I)
+        # Divergencia: nabla(sigma).nabla(u) + sigma * nabla^2(u)
+        lhs = grad_s_dot_grad_u + sigma * laplace_u
         
-        residual = -(grad_dot + sigma * laplacian_u) - q
-        return residual
-
-    def loss_data(self, r_m, u_star):
-        """
-        L_data: Data misfit loss.
-        """
-        u_pred = self.u_net(r_m)
-        return torch.mean((u_pred - u_star)**2)
-
-    def loss_pde(self, r_pde, r_A, r_B, I):
-        """
-        L_PDE: Physics loss enforcing the Poisson equation.
-        """
-        res = self.pde_residual(r_pde, r_A, r_B, I)
-        return torch.mean(res**2)
-
-    def loss_bc_neumann(self, r_N, n_vec):
-        """
-        L_bc (Neumann): Zero current flux across topographic surface.
-        Args:
-            r_N: Points on Neumann boundary (N, 3)
-            n_vec: Normal vectors at r_N (N, 3)
-        """
-        u = self.u_net(r_N)
-        grad_u = self._grad(u, r_N)
-        flux_surface = torch.sum(grad_u * n_vec, dim=1, keepdim=True)
-        return torch.mean(flux_surface**2)
-
-    def loss_bc_dirichlet(self, r_D):
-        """
-        L_bc (Dirichlet): Zero potential at infinite boundaries.
-        Args:
-            r_D: Points on Dirichlet boundary (N, 3)
-        """
-        u = self.u_net(r_D)
-        return torch.mean(u**2)
-
-    def loss_tv_reg(self, r_reg):
-        """
-        L_reg: Isotropic Total Variation (Huber/Charbonnier) regularization on conductivity.
-        """
-        sigma = self.sigma_net(r_reg)
-        grad_sigma = self._grad(sigma, r_reg)
-        norm_sq = torch.sum(grad_sigma**2, dim=1, keepdim=True)
-        return torch.mean(torch.sqrt(norm_sq + self.beta**2))
-
-    def loss_flux(self, r_Bc_A, n_Bc_A, r_Bc_B, n_Bc_B, I, area_Bc):
-        """
-        L_flux: Flux conservation around electrodes A and B.
-        Args:
-            r_Bc_A, r_Bc_B: Points on the control spheres (N, 3)
-            n_Bc_A, n_Bc_B: Outward normal vectors (N, 3)
-            I: Current intensity
-            area_Bc: Surface area of the control sphere
-        """
-        # Flux around A (Source -> integral = I)
-        sigma_A = self.sigma_net(r_Bc_A)
-        u_A = self.u_net(r_Bc_A)
-        grad_u_A = self._grad(u_A, r_Bc_A)
-        flux_A_pointwise = sigma_A * torch.sum(grad_u_A * n_Bc_A, dim=1, keepdim=True)
-        flux_A_mean = torch.mean(flux_A_pointwise)
-        loss_A = (flux_A_mean - I / area_Bc)**2
+        # Fuente Gaussiana q = I * (delta_A - delta_B)
+        r_A = source_coords[:, 0:3]
+        r_B = source_coords[:, 3:6]
+        q_A = self._gaussian_source(coords, r_A, I, epsilon)
+        q_B = self._gaussian_source(coords, r_B, I, epsilon)
+        q = q_A - q_B
         
-        # Flux around B (Sink -> integral = -I)
-        sigma_B = self.sigma_net(r_Bc_B)
-        u_B = self.u_net(r_Bc_B)
-        grad_u_B = self._grad(u_B, r_Bc_B)
-        flux_B_pointwise = sigma_B * torch.sum(grad_u_B * n_Bc_B, dim=1, keepdim=True)
-        flux_B_mean = torch.mean(flux_B_pointwise)
-        loss_B = (flux_B_mean + I / area_Bc)**2
+        residual = lhs - q
+        return torch.mean(residual**2)
+
+    def compute_bc_loss(self, surface_coords, inf_coords, source_coords_surf, source_coords_inf):
+        """
+        Condición de Neumann: du/dz = 0 en z=0
+        Condición de Dirichlet: u = 0 en fronteras lejanas
+        """
+        loss = 0.0
         
-        return loss_A + loss_B
+        # Neumann
+        if surface_coords is not None and surface_coords.shape[0] > 0:
+            derivs_surf = self.compute_derivatives(surface_coords, source_coords_surf)
+            du_dz = derivs_surf['du_dz']
+            loss_neumann = torch.mean(du_dz**2)
+            loss += loss_neumann
+            
+        # Dirichlet
+        if inf_coords is not None and inf_coords.shape[0] > 0:
+            u_inf = self.pot_net(inf_coords, source_coords_inf)
+            loss_dirichlet = torch.mean(u_inf**2)
+            loss += loss_dirichlet
+            
+        return loss
+
+    def compute_reg_loss(self, coords):
+        """
+        Total Variation (TV) en la conductividad.
+        L_reg = mean(|ds/dx| + |ds/dy| + |ds/dz|)
+        """
+        derivs = self.compute_derivatives(coords, source_coords=None)
+        ds_dx, ds_dy, ds_dz = derivs['ds_dx'], derivs['ds_dy'], derivs['ds_dz']
+        
+        tv_loss = torch.mean(torch.abs(ds_dx) + torch.abs(ds_dy) + torch.abs(ds_dz))
+        return tv_loss
+
+    def compute_flux_loss(self, coords_A, coords_B, normals_A, normals_B, source_coords_A, source_coords_B, I, area):
+        """
+        Conservación de carga local (L_flux).
+        Integrando la ley de Ohm localmente alrededor de los electrodos.
+        """
+        loss = 0.0
+        
+        # Electrodo A
+        if coords_A is not None and coords_A.shape[0] > 0:
+            derivs_A = self.compute_derivatives(coords_A, source_coords_A)
+            sigma_A = derivs_A['sigma']
+            grad_u_A = torch.cat([derivs_A['du_dx'], derivs_A['du_dy'], derivs_A['du_dz']], dim=1)
+            
+            flux_A_pointwise = torch.sum(sigma_A * grad_u_A * normals_A, dim=1, keepdim=True)
+            flux_A_mean = torch.mean(flux_A_pointwise)
+            loss_flux_A = (flux_A_mean - I / area)**2
+            loss += loss_flux_A
+            
+        # Electrodo B
+        if coords_B is not None and coords_B.shape[0] > 0:
+            derivs_B = self.compute_derivatives(coords_B, source_coords_B)
+            sigma_B = derivs_B['sigma']
+            grad_u_B = torch.cat([derivs_B['du_dx'], derivs_B['du_dy'], derivs_B['du_dz']], dim=1)
+            
+            flux_B_pointwise = torch.sum(sigma_B * grad_u_B * normals_B, dim=1, keepdim=True)
+            flux_B_mean = torch.mean(flux_B_pointwise)
+            loss_flux_B = (flux_B_mean + I / area)**2
+            loss += loss_flux_B
+            
+        return loss
