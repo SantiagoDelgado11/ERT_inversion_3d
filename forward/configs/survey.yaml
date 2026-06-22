@@ -12,13 +12,14 @@ survey:
   # Supported: wenner, schlumberger, dipole-dipole, pole-dipole
   arrays:
     wenner:
-      active: true
+      active: false
     schlumberger:
-      active: true
+      active: false
     dipole_dipole:
       active: true
       max_n: 8
+      a_max: 6
     pole_dipole:
-      active: true
+      active: false
       max_n: 8
       pole_distance: 1000.0  # Distance to infinity pole in meters

@@ -60,10 +60,22 @@ def build_conductivity_model(mesh, config=None):
     sigma = np.ones(mesh.nC) / bg_res
     
     # Define extent where anomalies can occur (avoid padding cells)
-    # E.g. core mesh region
-    hx_core = config.get('core_x', [-30, 30])
-    hy_core = config.get('core_y', [-10, 10])
-    hz_core = config.get('core_z', [-25, -2]) # Keep anomalies a bit below surface
+    with open("configs/mesh.yaml", 'r') as f:
+        mesh_config = yaml.safe_load(f)['mesh']
+    
+    pad_x = mesh_config['pad_x']
+    nx = mesh_config['nx']
+    pad_y = mesh_config['pad_y']
+    ny = mesh_config['ny']
+    pad_z = mesh_config['pad_z']
+    nz = mesh_config['nz']
+    
+    hx_core = [mesh.nodes_x[pad_x], mesh.nodes_x[pad_x + nx]]
+    hy_core = [mesh.nodes_y[pad_y], mesh.nodes_y[pad_y + ny]]
+    
+    z_min = mesh.nodes_z[pad_z]
+    z_max = mesh.nodes_z[pad_z + nz] - 2.0 # Keep anomalies a bit below surface
+    hz_core = [z_min, z_max]
     
     anomalies = generate_random_anomalies(config, hx_core, hy_core, hz_core)
     

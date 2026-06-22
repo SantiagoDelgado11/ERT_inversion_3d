@@ -102,19 +102,33 @@ def main():
     n_levels = []
     rho_as = []
     
+    with open("configs/survey.yaml", 'r') as f:
+        survey_config = yaml.safe_load(f)['survey']
+    dx = survey_config.get('electrode_spacing', 2.0)
+    
     for m in measurements:
-        pos_A = sample['electrodes'][m['A']]
-        pos_B = sample['electrodes'][m['B']] if m['B'] != -1 else pos_A + np.array([1000,0,0])
-        pos_M = sample['electrodes'][m['M']]
-        pos_N = sample['electrodes'][m['N']]
+        A_idx = m['A']
+        B_idx = m['B']
+        M_idx = m['M']
+        N_idx = m['N']
         
-        # Approximation for pseudosection plotting
-        x_c = (pos_A[0] + pos_B[0] + pos_M[0] + pos_N[0]) / 4.0
-        # n level approx is distance
-        a_approx = abs(pos_M[0] - pos_N[0])
+        pos_A = sample['electrodes'][A_idx]
+        pos_B = sample['electrodes'][B_idx] if B_idx != -1 else pos_A + np.array([1000,0,0])
+        pos_M = sample['electrodes'][M_idx]
+        pos_N = sample['electrodes'][N_idx]
         
-        x_coords.append(x_c)
-        n_levels.append(-a_approx) # negative for depth
+        X_mid = (pos_A[0] + pos_B[0] + pos_M[0] + pos_N[0]) / 4.0
+        
+        a_mult = abs(M_idx - N_idx)
+        if B_idx != -1:
+            n_mult = abs(M_idx - B_idx) / a_mult if a_mult > 0 else 1
+        else:
+            n_mult = abs(M_idx - A_idx) / a_mult if a_mult > 0 else 1
+            
+        Z_pseudo = -((n_mult + 1) * a_mult * dx) / 2.0
+        
+        x_coords.append(X_mid)
+        n_levels.append(Z_pseudo)
         rho_as.append(m['rho_a'])
         
     sc = axs[1].scatter(x_coords, n_levels, c=rho_as, cmap='jet')

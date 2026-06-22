@@ -1,15 +1,26 @@
+import yaml
+
 def generate_dipole_dipole(num_electrodes, max_n=8):
     """
     Generates Dipole-Dipole array sequence.
     A B M N format.
     """
+    with open("configs/survey.yaml", 'r') as f:
+        config = yaml.safe_load(f)['survey']
+        
+    dd_config = config['arrays'].get('dipole_dipole', {})
+    a_max = dd_config.get('a_max', 6)
+    n_max = dd_config.get('max_n', max_n)
+    
     sequence = []
-    for a in range(1, num_electrodes // 3):
-        for n in range(1, min(max_n + 1, (num_electrodes - 2*a) // a + 1)):
-            for i in range(num_electrodes - (n + 2) * a):
+    for a in range(1, a_max + 1):
+        for n in range(1, n_max + 1):
+            for i in range(num_electrodes):
                 A = i
-                B = A + a
+                B = i + a
                 M = B + n * a
                 N = M + a
-                sequence.append((A, B, M, N))
+                
+                if N < num_electrodes:
+                    sequence.append((A, B, M, N))
     return sequence
