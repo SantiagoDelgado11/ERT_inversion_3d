@@ -20,7 +20,7 @@ def train_pinn(
     epsilon: float,
     num_epochs_adam: int = 1000, 
     num_epochs_lbfgs: int = 500,
-    lr: float = 1e-3, 
+    lr: float = 1e-4, 
     device: str = 'cpu',
     use_wandb: bool = False
 ):
@@ -55,6 +55,9 @@ def train_pinn(
     
     r_reg = prepare(reg_samples['r_reg'], requires_grad=True)
     
+    dyn_w = {'pde': 1.0, 'bc': 100.0, 'flux': 10.0, 'reg': 1.0}
+    alpha_lra = 0.9
+    
     loss_dict = {}
 
     def closure():
@@ -66,7 +69,20 @@ def train_pinn(
         if 'source' in data_samples:
             source_data = prepare(data_samples['source'])
             u_pred = u_net(r_m, source_data)
-            loss_data = torch.mean((u_pred - u_star)**2)
+            
+            # Aislamiento de la Pérdida de Datos: Evitar evaluación sobre los electrodos
+            r_A_data = source_data[:, 0:3]
+            r_B_data = source_data[:, 3:6]
+            
+            dist_sq_A_m = torch.sum((r_m - r_A_data)**2, dim=1, keepdim=True)
+            dist_sq_B_m = torch.sum((r_m - r_B_data)**2, dim=1, keepdim=True)
+            
+            R_scale_sq = (3.0 * epsilon)**2
+            w_data_A = torch.tanh(dist_sq_A_m / R_scale_sq)
+            w_data_B = torch.tanh(dist_sq_B_m / R_scale_sq)
+            w_data_mask = w_data_A * w_data_B
+            
+            loss_data = torch.mean(w_data_mask * (u_pred - u_star)**2)
         else:
             loss_data = torch.tensor(0.0, device=device)
 
@@ -88,21 +104,45 @@ def train_pinn(
             current_I, area_Bc
         )
         
-        # Ponderación Dinámica (Soft-Warmup) para w_pde
-        # tau = 200 épocas. Bloquea PDE al inicio para forzar el aprendizaje de BCs.
-        w_pde_final = weights.get('w_pde', 1.0)
-        if is_lbfgs:
-            current_w_pde = w_pde_final
-        else:
-            # epoch se captura del scope superior
-            current_w_pde = w_pde_final * (1.0 - math.exp(-max(1, epoch) / 200.0))
+        # Learning Rate Annealing (Wang et al., 2021)
+        if not is_lbfgs and loss_data.requires_grad and epoch % 10 == 0:
+            last_layer_u = u_net.mlp.network[-1].weight
+            grad_data = torch.autograd.grad(loss_data, last_layer_u, retain_graph=True)[0]
+            max_grad_data = torch.max(torch.abs(grad_data)) + 1e-8
             
-        # Suma ponderada con pesos fijos y dinámicos
+            def update_dyn_w(key, loss_term):
+                if loss_term.requires_grad:
+                    grad_term = torch.autograd.grad(loss_term, last_layer_u, retain_graph=True)[0]
+                    mean_grad_term = torch.mean(torch.abs(grad_term)) + 1e-8
+                    hat_lambda = max_grad_data / mean_grad_term
+                    # Clipping de lambda estricto para evitar multiplicadores infinitos
+                    hat_lambda = torch.clamp(hat_lambda, max=100.0)
+                    dyn_w[key] = alpha_lra * dyn_w[key] + (1.0 - alpha_lra) * hat_lambda.item()
+            
+            update_dyn_w('pde', loss_pde)
+            update_dyn_w('bc', loss_bc)
+            update_dyn_w('flux', loss_flux)
+            
+            last_layer_sigma = sigma_net.mlp.network[-1].weight
+            if loss_reg.requires_grad and loss_pde.requires_grad:
+                try:
+                    grad_pde_sigma = torch.autograd.grad(loss_pde, last_layer_sigma, retain_graph=True, allow_unused=True)[0]
+                    grad_reg = torch.autograd.grad(loss_reg, last_layer_sigma, retain_graph=True, allow_unused=True)[0]
+                    if grad_pde_sigma is not None and grad_reg is not None:
+                        max_grad_pde_sigma = torch.max(torch.abs(grad_pde_sigma)) + 1e-8
+                        mean_grad_reg = torch.mean(torch.abs(grad_reg)) + 1e-8
+                        hat_lambda_reg = max_grad_pde_sigma / mean_grad_reg
+                        hat_lambda_reg = torch.clamp(hat_lambda_reg, max=100.0)
+                        dyn_w['reg'] = alpha_lra * dyn_w['reg'] + (1.0 - alpha_lra) * hat_lambda_reg.item()
+                except Exception:
+                    pass
+
+        # Suma ponderada con pesos dinámicos y base
         loss_total = (weights.get('w_data', 1.0) * loss_data +
-                      current_w_pde * loss_pde +
-                      weights.get('w_bc', 1.0) * loss_bc +
-                      weights.get('w_reg', 1.0) * loss_reg +
-                      weights.get('w_flux', 1.0) * loss_flux)
+                      dyn_w['pde'] * loss_pde +
+                      dyn_w['bc'] * loss_bc +
+                      dyn_w['reg'] * loss_reg +
+                      dyn_w['flux'] * loss_flux)
                       
         loss_dict = {
             "loss_data": loss_data.item(),
@@ -110,11 +150,17 @@ def train_pinn(
             "loss_bc": loss_bc.item(),
             "loss_reg": loss_reg.item(),
             "loss_flux": loss_flux.item(),
-            "loss_total": loss_total.item()
+            "loss_total": loss_total.item(),
+            "lambda_pde": dyn_w['pde'],
+            "lambda_bc": dyn_w['bc'],
+            "lambda_flux": dyn_w['flux'],
+            "lambda_reg": dyn_w['reg']
         }
 
         if loss_total.requires_grad:
             loss_total.backward()
+            # Clipping Global Riguroso de Gradientes
+            torch.nn.utils.clip_grad_norm_(list(u_net.parameters()) + list(sigma_net.parameters()), max_norm=1.0)
             
         return loss_total
 
@@ -123,9 +169,15 @@ def train_pinn(
     is_lbfgs = False
     pbar_adam = tqdm(range(num_epochs_adam), desc="Adam")
     for epoch in pbar_adam:
+        # Warm-up lineal de 500 pasos
+        warmup_steps = 500
+        current_lr = lr * min(1.0, (epoch + 1) / warmup_steps)
+        for param_group in optimizer_adam.param_groups:
+            param_group['lr'] = current_lr
+            
         optimizer_adam.step(closure)
         if use_wandb:
-            wandb.log({"epoch_adam": epoch, **loss_dict})
+            wandb.log({"epoch_adam": epoch, "lr_adam": current_lr, **loss_dict})
         pbar_adam.set_postfix(loss=f"{loss_dict.get('loss_total', 0):.4e}")
 
     # --- Fase 2: L-BFGS ---

@@ -95,12 +95,14 @@ class PhysicsInformer:
         
         # Ponderación Espacial (Spatial Loss Weighting) w(x)
         # Atenúa fuertemente a 0 en las vecindades de r_A y r_B para evitar que
-        # el MSE intente ajustar la infinidad de la fuente, relajando la carga del optimizador.
+        # el MSE intente ajustar la infinidad de la fuente.
+        # Transición continua (Tanh) en D^2 (Infinitamente diferenciable, sin divisiones por 0)
         dist_sq_A = torch.sum((coords - r_A)**2, dim=1, keepdim=True)
         dist_sq_B = torch.sum((coords - r_B)**2, dim=1, keepdim=True)
-        alpha = 2.0 
-        w_A = 1.0 - torch.exp(-dist_sq_A / (alpha * epsilon**2))
-        w_B = 1.0 - torch.exp(-dist_sq_B / (alpha * epsilon**2))
+        
+        R_scale_sq = (3.0 * epsilon)**2  # Varianza de atenuación mayor a la influencia Gaussiana
+        w_A = torch.tanh(dist_sq_A / R_scale_sq)
+        w_B = torch.tanh(dist_sq_B / R_scale_sq)
         w_x = w_A * w_B
         
         residual = w_x * (lhs - q)

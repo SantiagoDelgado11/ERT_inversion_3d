@@ -1,0 +1,59 @@
+Iniciando entrenamiento en: cuda:0
+Cargando dataset y generando puntos de colocación físicos...
+Iniciando amortización / sobreajuste físico en el primer batch...
+Iniciando Fase 1: Entrenamiento inicial con Adam
+Adam:   0%|                                                                 | 0/1000 [00:00<?, ?it/s]C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\autograd\graph.py:869: UserWarning: Attempting to run cuBLAS, but there was no current CUDA context! Attempting to set the primary context... (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\cuda\CublasHandlePool.cpp:335.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+Adam: 100%|█████████████████████████████████████| 1000/1000 [02:43<00:00,  6.11it/s, loss=1.0095e-01]
+Iniciando Fase 2: Ajuste fino con L-BFGS
+L-BFGS:  55%|████████████████████▏                | 273/500 [25:08<20:53,  5.52s/it, loss=1.1998e-04]
+Traceback (most recent call last):
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\run_training.py", line 116, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\run_training.py", line 90, in main
+    trained_pot_net, trained_sigma_net = train_pinn(
+                                         ~~~~~~~~~~^
+        u_net=pot_net,
+        ^^^^^^^^^^^^^^
+    ...<15 lines>...
+        use_wandb=True
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\train.py", line 154, in train_pinn
+    optimizer_lbfgs.step(closure)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\optim\optimizer.py", line 533, in wrapper
+    out = func(*args, **kwargs)
+  File "C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+  File "C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\optim\lbfgs.py", line 498, in step
+    loss = closure()
+  File "C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\train.py", line 98, in closure
+    loss_flux = informer.compute_flux_loss(
+        r_Bc_A, r_Bc_B, n_Bc_A, n_Bc_B,
+        source_coords_pde[:r_Bc_A.shape[0]], source_coords_pde[:r_Bc_B.shape[0]],
+        current_I, area_Bc
+    )
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\physics_informer.py", line 166, in compute_flux_loss
+    derivs_B = self.compute_derivatives(coords_B, source_coords_B)
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\physics_informer.py", line 45, in compute_derivatives
+    dflux_x = autograd.grad(outputs=flux_x, inputs=coords, grad_outputs=torch.ones_like(flux_x), create_graph=True, retain_graph=True)[0][:, 0:1]
+              ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\autograd\__init__.py", line 532, in grad
+    result = _engine_run_backward(
+        outputs,
+    ...<5 lines>...
+        accumulate_grad=False,
+    )
+  File "C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\autograd\graph.py", line 869, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        t_outputs, *args, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )  # Calls into the C++ engine to run the backward pass
+    ^
+KeyboardInterrupt

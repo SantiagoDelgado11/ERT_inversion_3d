@@ -1,0 +1,1 @@
+{"loss_total":428.17449951171875,"_timestamp":1.7822505190241275e+09,"loss_data":404.2124938964844,"epoch_lbfgs":90,"_wandb":{"runtime":702},"epoch_adam":999,"_runtime":702,"loss_reg":0.002188029931858182,"_step":1090,"loss_pde":1.308582365730504e-12,"loss_flux":1.7987000777708317e-12,"loss_bc":2.384792363585575e-09}
