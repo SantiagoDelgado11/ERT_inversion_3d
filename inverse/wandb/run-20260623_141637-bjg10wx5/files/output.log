@@ -1,0 +1,10 @@
+Iniciando entrenamiento en: cuda:0
+Cargando dataset y generando puntos de colocación físicos...
+Iniciando amortización / sobreajuste físico en el primer batch...
+Iniciando Fase 1: Entrenamiento inicial con Adam
+Adam:   0%|                                                                 | 0/1000 [00:00<?, ?it/s]C:\Users\Doc\miniconda3\envs\mi_env\Lib\site-packages\torch\autograd\graph.py:869: UserWarning: Attempting to run cuBLAS, but there was no current CUDA context! Attempting to set the primary context... (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\cuda\CublasHandlePool.cpp:335.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+Adam: 100%|█████████████████████████████████████| 1000/1000 [01:38<00:00, 10.19it/s, loss=8.7832e-02]
+Iniciando Fase 2: Ajuste fino con L-BFGS
+L-BFGS: 100%|█████████████████████████████████████| 500/500 [28:00<00:00,  3.36s/it, loss=5.4578e-05]
+Entrenamiento completado. Guardando pesos...

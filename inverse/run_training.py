@@ -12,8 +12,8 @@ def main():
     parser = argparse.ArgumentParser(description="Entrenamiento PINN para ERT 3D")
     parser.add_argument("--w_data", type=float, default=1.0, help="Peso para el Data Loss")
     parser.add_argument("--w_pde", type=float, default=1e-4, help="Peso para el PDE Loss (Poisson)")
-    parser.add_argument("--w_bc", type=float, default=1e-2, help="Peso para Condiciones de Frontera")
-    parser.add_argument("--w_reg", type=float, default=1e-3, help="Peso de Regularización (TV)")
+    parser.add_argument("--w_bc", type=float, default=10.0, help="Peso para Condiciones de Frontera (Hard Constraint)")
+    parser.add_argument("--w_reg", type=float, default=0.1, help="Peso de Regularización (TV)")
     parser.add_argument("--w_flux", type=float, default=1e-2, help="Peso para el Flujo de Corriente")
     args = parser.parse_args()
 
@@ -38,7 +38,8 @@ def main():
     # Hiperparámetros físicos y de entrenamiento
     h5_filepath = '../forward/dataset/dataset_validation.h5'
     current_I = 1.0
-    epsilon = 0.5
+    # Relajamos epsilon a 3.0 para cumplir con el límite de Nyquist de la malla (dx=2.0)
+    epsilon = 3.0
     
     # Pesos de la Función de Pérdida pasados por argumento
     weights = {

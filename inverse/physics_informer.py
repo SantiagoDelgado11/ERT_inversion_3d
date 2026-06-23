@@ -23,21 +23,8 @@ class PhysicsInformer:
         # Forward pass: Potencial (si se proporcionan fuentes)
         if source_coords is not None:
             u = self.pot_net(coords, source_coords)
-        else:
-            u = None
-        
-        # 1. Gradiente de conductividad: nabla(sigma)
-        grad_sigma = autograd.grad(
-            outputs=sigma, 
-            inputs=coords, 
-            grad_outputs=torch.ones_like(sigma),
-            create_graph=True,
-            retain_graph=True
-        )[0]
-        ds_dx, ds_dy, ds_dz = grad_sigma[:, 0:1], grad_sigma[:, 1:2], grad_sigma[:, 2:3]
-
-        if u is not None:
-            # 2. Gradiente del potencial: nabla(u)
+            
+            # Gradiente del potencial: nabla(u)
             grad_u = autograd.grad(
                 outputs=u,
                 inputs=coords,
@@ -45,26 +32,37 @@ class PhysicsInformer:
                 create_graph=True,
                 retain_graph=True
             )[0]
+            
             du_dx, du_dy, du_dz = grad_u[:, 0:1], grad_u[:, 1:2], grad_u[:, 2:3]
             
-            # 3. Laplaciano (segundas derivadas): nabla^2(u)
-            d2u_dx2 = autograd.grad(
-                outputs=du_dx, inputs=coords, grad_outputs=torch.ones_like(du_dx), create_graph=True, retain_graph=True
-            )[0][:, 0:1]
-            d2u_dy2 = autograd.grad(
-                outputs=du_dy, inputs=coords, grad_outputs=torch.ones_like(du_dy), create_graph=True, retain_graph=True
-            )[0][:, 1:2]
-            d2u_dz2 = autograd.grad(
-                outputs=du_dz, inputs=coords, grad_outputs=torch.ones_like(du_dz), create_graph=True, retain_graph=True
-            )[0][:, 2:3]
+            # Flujo acoplado: J = sigma * nabla(u)
+            # El autograd backpropagará naturalmente hacia sigma_net y pot_net al derivar esto
+            flux_x = sigma * du_dx
+            flux_y = sigma * du_dy
+            flux_z = sigma * du_dz
+            
+            # Divergencia del Flujo: nabla . J
+            dflux_x = autograd.grad(outputs=flux_x, inputs=coords, grad_outputs=torch.ones_like(flux_x), create_graph=True, retain_graph=True)[0][:, 0:1]
+            dflux_y = autograd.grad(outputs=flux_y, inputs=coords, grad_outputs=torch.ones_like(flux_y), create_graph=True, retain_graph=True)[0][:, 1:2]
+            dflux_z = autograd.grad(outputs=flux_z, inputs=coords, grad_outputs=torch.ones_like(flux_z), create_graph=True, retain_graph=True)[0][:, 2:3]
+            
+            div_flux = dflux_x + dflux_y + dflux_z
             
             return {
                 'sigma': sigma, 'u': u,
-                'ds_dx': ds_dx, 'ds_dy': ds_dy, 'ds_dz': ds_dz,
-                'du_dx': du_dx, 'du_dy': du_dy, 'du_dz': du_dz,
-                'd2u_dx2': d2u_dx2, 'd2u_dy2': d2u_dy2, 'd2u_dz2': d2u_dz2
+                'div_flux': div_flux,
+                'du_dx': du_dx, 'du_dy': du_dy, 'du_dz': du_dz
             }
         else:
+            # 1. Gradiente de conductividad puro (para Regularización TV)
+            grad_sigma = autograd.grad(
+                outputs=sigma, 
+                inputs=coords, 
+                grad_outputs=torch.ones_like(sigma),
+                create_graph=True,
+                retain_graph=True
+            )[0]
+            ds_dx, ds_dy, ds_dz = grad_sigma[:, 0:1], grad_sigma[:, 1:2], grad_sigma[:, 2:3]
             return {
                 'sigma': sigma,
                 'ds_dx': ds_dx, 'ds_dy': ds_dy, 'ds_dz': ds_dz
@@ -85,18 +83,8 @@ class PhysicsInformer:
         """
         derivs = self.compute_derivatives(coords, source_coords)
         
-        sigma = derivs['sigma']
-        ds_dx, ds_dy, ds_dz = derivs['ds_dx'], derivs['ds_dy'], derivs['ds_dz']
-        du_dx, du_dy, du_dz = derivs['du_dx'], derivs['du_dy'], derivs['du_dz']
-        d2u_dx2, d2u_dy2, d2u_dz2 = derivs['d2u_dx2'], derivs['d2u_dy2'], derivs['d2u_dz2']
-        
-        # Laplaciano de u
-        laplace_u = d2u_dx2 + d2u_dy2 + d2u_dz2
-        # Producto punto nabla(sigma) . nabla(u)
-        grad_s_dot_grad_u = ds_dx * du_dx + ds_dy * du_dy + ds_dz * du_dz
-        
-        # Divergencia: nabla(sigma).nabla(u) + sigma * nabla^2(u)
-        lhs = grad_s_dot_grad_u + sigma * laplace_u
+        # Lado izquierdo acoplado
+        lhs = derivs['div_flux']
         
         # Fuente Gaussiana q = I * (delta_A - delta_B)
         r_A = source_coords[:, 0:3]
@@ -105,8 +93,20 @@ class PhysicsInformer:
         q_B = self._gaussian_source(coords, r_B, I, epsilon)
         q = q_A - q_B
         
-        residual = lhs - q
-        return torch.mean(residual**2)
+        # Ponderación Espacial (Spatial Loss Weighting) w(x)
+        # Atenúa fuertemente a 0 en las vecindades de r_A y r_B para evitar que
+        # el MSE intente ajustar la infinidad de la fuente, relajando la carga del optimizador.
+        dist_sq_A = torch.sum((coords - r_A)**2, dim=1, keepdim=True)
+        dist_sq_B = torch.sum((coords - r_B)**2, dim=1, keepdim=True)
+        alpha = 2.0 
+        w_A = 1.0 - torch.exp(-dist_sq_A / (alpha * epsilon**2))
+        w_B = 1.0 - torch.exp(-dist_sq_B / (alpha * epsilon**2))
+        w_x = w_A * w_B
+        
+        residual = w_x * (lhs - q)
+        
+        # Usamos Huber Loss (Smooth L1) con el residual enmascarado
+        return torch.nn.functional.huber_loss(residual, torch.zeros_like(residual), delta=100.0)
 
     def compute_bc_loss(self, surface_coords, inf_coords, source_coords_surf, source_coords_inf):
         """

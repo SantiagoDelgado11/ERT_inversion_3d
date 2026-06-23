@@ -17,3 +17,8 @@ config: {'w_data': 1.0, 'w_pde': 0.0001, 'w_bc': 0.01, 'w_reg': 0.001, 'w_flux':
 2026-06-23 09:46:56,771 INFO    MainThread:21308 [wandb_run.py:_redirect():2472] Wrapping output streams.
 2026-06-23 09:46:56,771 INFO    MainThread:21308 [wandb_run.py:_redirect():2495] Redirects installed.
 2026-06-23 09:46:56,778 INFO    MainThread:21308 [wandb_init.py:init():1094] run started, returning control to user process
+2026-06-23 10:20:53,795 INFO    MainThread:21308 [wandb_run.py:_finish():2321] finishing run santiago2192694-universidad-industrial-de-santander/ERT_PINN_3D/ar2f4ivz
+2026-06-23 10:20:53,796 INFO    MainThread:21308 [wandb_run.py:_atexit_cleanup():2520] got exitcode: 0
+2026-06-23 10:20:53,797 INFO    MainThread:21308 [wandb_run.py:_restore():2502] restore
+2026-06-23 10:20:53,797 INFO    MainThread:21308 [wandb_run.py:_restore():2508] restore done
+2026-06-23 10:20:55,457 INFO    MainThread:21308 [wandb_run.py:_footer_sync_info():3889] logging synced files

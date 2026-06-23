@@ -2,6 +2,8 @@ import torch
 import torch.optim as optim
 from typing import Dict, Any
 import wandb
+from tqdm import tqdm
+import math
 
 def train_pinn(
     u_net: torch.nn.Module, 
@@ -86,9 +88,18 @@ def train_pinn(
             current_I, area_Bc
         )
         
-        # Suma ponderada con pesos fijos (Mitigación pasiva)
+        # Ponderación Dinámica (Soft-Warmup) para w_pde
+        # tau = 200 épocas. Bloquea PDE al inicio para forzar el aprendizaje de BCs.
+        w_pde_final = weights.get('w_pde', 1.0)
+        if is_lbfgs:
+            current_w_pde = w_pde_final
+        else:
+            # epoch se captura del scope superior
+            current_w_pde = w_pde_final * (1.0 - math.exp(-max(1, epoch) / 200.0))
+            
+        # Suma ponderada con pesos fijos y dinámicos
         loss_total = (weights.get('w_data', 1.0) * loss_data +
-                      weights.get('w_pde', 1.0) * loss_pde +
+                      current_w_pde * loss_pde +
                       weights.get('w_bc', 1.0) * loss_bc +
                       weights.get('w_reg', 1.0) * loss_reg +
                       weights.get('w_flux', 1.0) * loss_flux)
@@ -109,25 +120,27 @@ def train_pinn(
 
     # --- Fase 1: Adam ---
     print("Iniciando Fase 1: Entrenamiento inicial con Adam")
-    for epoch in range(num_epochs_adam):
+    is_lbfgs = False
+    pbar_adam = tqdm(range(num_epochs_adam), desc="Adam")
+    for epoch in pbar_adam:
         optimizer_adam.step(closure)
         if use_wandb:
             wandb.log({"epoch_adam": epoch, **loss_dict})
-        if epoch % 100 == 0:
-            print(f"Adam Epoch {epoch}: Loss = {loss_dict['loss_total']:.6e}")
+        pbar_adam.set_postfix(loss=f"{loss_dict.get('loss_total', 0):.4e}")
 
     # --- Fase 2: L-BFGS ---
     print("Iniciando Fase 2: Ajuste fino con L-BFGS")
+    is_lbfgs = True
     optimizer_lbfgs = optim.LBFGS(
         list(u_net.parameters()) + list(sigma_net.parameters()),
         lr=1.0, max_iter=20, tolerance_grad=1e-7, tolerance_change=1e-9, history_size=50
     )
     
-    for epoch in range(num_epochs_lbfgs):
+    pbar_lbfgs = tqdm(range(num_epochs_lbfgs), desc="L-BFGS")
+    for epoch in pbar_lbfgs:
         optimizer_lbfgs.step(closure)
         if use_wandb:
             wandb.log({"epoch_lbfgs": epoch, **loss_dict})
-        if epoch % 10 == 0:
-            print(f"L-BFGS Epoch {epoch}: Loss = {loss_dict['loss_total']:.6e}")
+        pbar_lbfgs.set_postfix(loss=f"{loss_dict.get('loss_total', 0):.4e}")
 
     return u_net, sigma_net
