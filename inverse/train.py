@@ -1,6 +1,7 @@
 import torch
 import torch.optim as optim
 from typing import Dict, Any
+import wandb
 
 def train_pinn(
     u_net: torch.nn.Module, 
@@ -18,7 +19,8 @@ def train_pinn(
     num_epochs_adam: int = 1000, 
     num_epochs_lbfgs: int = 500,
     lr: float = 1e-3, 
-    device: str = 'cpu'
+    device: str = 'cpu',
+    use_wandb: bool = False
 ):
     u_net = u_net.to(device)
     sigma_net = sigma_net.to(device)
@@ -51,8 +53,10 @@ def train_pinn(
     
     r_reg = prepare(reg_samples['r_reg'], requires_grad=True)
     
+    loss_dict = {}
+
     def closure():
-        """El closure es obligatorio para permitir la ejecución de L-BFGS"""
+        nonlocal loss_dict
         if torch.is_grad_enabled():
             optimizer_adam.zero_grad()
             
@@ -89,6 +93,15 @@ def train_pinn(
                       weights.get('w_reg', 1.0) * loss_reg +
                       weights.get('w_flux', 1.0) * loss_flux)
                       
+        loss_dict = {
+            "loss_data": loss_data.item(),
+            "loss_pde": loss_pde.item(),
+            "loss_bc": loss_bc.item(),
+            "loss_reg": loss_reg.item(),
+            "loss_flux": loss_flux.item(),
+            "loss_total": loss_total.item()
+        }
+
         if loss_total.requires_grad:
             loss_total.backward()
             
@@ -98,8 +111,10 @@ def train_pinn(
     print("Iniciando Fase 1: Entrenamiento inicial con Adam")
     for epoch in range(num_epochs_adam):
         optimizer_adam.step(closure)
+        if use_wandb:
+            wandb.log({"epoch_adam": epoch, **loss_dict})
         if epoch % 100 == 0:
-            print(f"Adam Epoch {epoch}: Loss = {closure().item():.6e}")
+            print(f"Adam Epoch {epoch}: Loss = {loss_dict['loss_total']:.6e}")
 
     # --- Fase 2: L-BFGS ---
     print("Iniciando Fase 2: Ajuste fino con L-BFGS")
@@ -110,7 +125,9 @@ def train_pinn(
     
     for epoch in range(num_epochs_lbfgs):
         optimizer_lbfgs.step(closure)
+        if use_wandb:
+            wandb.log({"epoch_lbfgs": epoch, **loss_dict})
         if epoch % 10 == 0:
-            print(f"L-BFGS Epoch {epoch}: Loss = {closure().item():.6e}")
+            print(f"L-BFGS Epoch {epoch}: Loss = {loss_dict['loss_total']:.6e}")
 
     return u_net, sigma_net

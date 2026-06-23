@@ -1,0 +1,11 @@
+Iniciando entrenamiento en: cpu
+Cargando dataset y generando puntos de colocación físicos...
+Iniciando amortización / sobreajuste físico en el primer batch...
+Iniciando Fase 1: Entrenamiento inicial con Adam
+Adam Epoch 0: Loss = 8.398458e+03
+Adam Epoch 100: Loss = 1.758323e+02
+Adam Epoch 200: Loss = 1.041966e+02
+Adam Epoch 300: Loss = 3.658063e+01
+Adam Epoch 400: Loss = 7.565985e+00
+Adam Epoch 500: Loss = 4.023096e+00
+Adam Epoch 600: Loss = 7.213085e+00

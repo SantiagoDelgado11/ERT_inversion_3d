@@ -1,0 +1,28 @@
+Iniciando entrenamiento en: cpu
+Cargando dataset y generando puntos de colocación físicos...
+Iniciando amortización / sobreajuste físico en el primer batch...
+Iniciando Fase 1: Entrenamiento inicial con Adam
+Adam Epoch 0: Loss = 9.481330e+03
+Adam Epoch 100: Loss = 5.457700e+02
+Adam Epoch 200: Loss = 1.016811e+02
+Adam Epoch 300: Loss = 7.219250e+01
+Adam Epoch 400: Loss = 5.032906e+01
+Adam Epoch 500: Loss = 2.267115e+01
+Adam Epoch 600: Loss = 3.130762e+01
+Adam Epoch 700: Loss = 1.397599e+01
+Adam Epoch 800: Loss = 1.278171e+01
+Adam Epoch 900: Loss = 1.036347e+01
+Iniciando Fase 2: Ajuste fino con L-BFGS
+L-BFGS Epoch 0: Loss = 6.810553e+00
+L-BFGS Epoch 10: Loss = 1.349619e+00
+L-BFGS Epoch 20: Loss = 5.323320e-01
+L-BFGS Epoch 30: Loss = 2.854243e-01
+L-BFGS Epoch 40: Loss = 1.692896e-01
+L-BFGS Epoch 50: Loss = 1.072314e-01
+L-BFGS Epoch 60: Loss = 7.465579e-02
+L-BFGS Epoch 70: Loss = 5.469505e-02
+L-BFGS Epoch 80: Loss = 4.044921e-02
+L-BFGS Epoch 90: Loss = 3.091353e-02
+L-BFGS Epoch 100: Loss = 2.448974e-02
+L-BFGS Epoch 110: Loss = 1.973553e-02
+L-BFGS Epoch 120: Loss = 1.640641e-02
