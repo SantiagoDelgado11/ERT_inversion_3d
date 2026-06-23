@@ -17,7 +17,7 @@ def train_pinn(
     reg_samples: Dict[str, torch.Tensor],
     weights: Dict[str, float], 
     current_I: float,
-    epsilon: float,
+    gamma: float,
     num_epochs_adam: int = 1000, 
     num_epochs_lbfgs: int = 500,
     lr: float = 1e-4, 
@@ -77,7 +77,7 @@ def train_pinn(
             dist_sq_A_m = torch.sum((r_m - r_A_data)**2, dim=1, keepdim=True)
             dist_sq_B_m = torch.sum((r_m - r_B_data)**2, dim=1, keepdim=True)
             
-            R_scale_sq = (3.0 * epsilon)**2
+            R_scale_sq = (3.0 * gamma)**2
             w_data_A = torch.tanh(dist_sq_A_m / R_scale_sq)
             w_data_B = torch.tanh(dist_sq_B_m / R_scale_sq)
             w_data_mask = w_data_A * w_data_B
@@ -87,7 +87,7 @@ def train_pinn(
             loss_data = torch.tensor(0.0, device=device)
 
         # Invocando la API real del physics_informer
-        loss_pde = informer.compute_pde_loss(r_pde, source_coords_pde, current_I, epsilon)
+        loss_pde = informer.compute_pde_loss(r_pde, source_coords_pde, current_I, gamma)
         
         # Unificando las Condiciones de Frontera
         loss_bc = informer.compute_bc_loss(

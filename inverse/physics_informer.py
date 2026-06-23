@@ -68,15 +68,15 @@ class PhysicsInformer:
                 'ds_dx': ds_dx, 'ds_dy': ds_dy, 'ds_dz': ds_dz
             }
 
-    def _gaussian_source(self, coords, source_pos, I, epsilon):
+    def _gaussian_source(self, coords, source_pos, I, gamma):
         """
         Aproxima una carga puntual (delta de Dirac) mediante una Gaussiana.
         """
         dist_sq = torch.sum((coords - source_pos)**2, dim=1, keepdim=True)
-        coeff = 1.0 / ((torch.sqrt(torch.tensor(torch.pi)) * epsilon)**3)
-        return I * coeff * torch.exp(-dist_sq / (epsilon**2))
+        coeff = I / ((torch.sqrt(torch.tensor(2 * torch.pi)) * gamma)**3)
+        return coeff * torch.exp(-dist_sq / (2 * gamma**2))
 
-    def compute_pde_loss(self, coords, source_coords, I, epsilon):
+    def compute_pde_loss(self, coords, source_coords, I, gamma):
         """
         Evalúa el residual de la PDE (Ecuación de Poisson):
         nabla . (sigma * nabla(u)) - q = 0
@@ -89,8 +89,8 @@ class PhysicsInformer:
         # Fuente Gaussiana q = I * (delta_A - delta_B)
         r_A = source_coords[:, 0:3]
         r_B = source_coords[:, 3:6]
-        q_A = self._gaussian_source(coords, r_A, I, epsilon)
-        q_B = self._gaussian_source(coords, r_B, I, epsilon)
+        q_A = self._gaussian_source(coords, r_A, I, gamma)
+        q_B = self._gaussian_source(coords, r_B, I, gamma)
         q = q_A - q_B
         
         # Ponderación Espacial (Spatial Loss Weighting) w(x)
@@ -100,7 +100,7 @@ class PhysicsInformer:
         dist_sq_A = torch.sum((coords - r_A)**2, dim=1, keepdim=True)
         dist_sq_B = torch.sum((coords - r_B)**2, dim=1, keepdim=True)
         
-        R_scale_sq = (3.0 * epsilon)**2  # Varianza de atenuación mayor a la influencia Gaussiana
+        R_scale_sq = (3.0 * gamma)**2  # Varianza de atenuación encapsula 3*gamma
         w_A = torch.tanh(dist_sq_A / R_scale_sq)
         w_B = torch.tanh(dist_sq_B / R_scale_sq)
         w_x = w_A * w_B

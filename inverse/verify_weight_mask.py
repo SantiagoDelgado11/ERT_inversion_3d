@@ -3,8 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def verify_weight_mask():
-    epsilon = 0.5
-    R_scale = 3.0 * epsilon
+    gamma = 4.0
+    R_scale = 3.0 * gamma
 
     # Create a 2D grid for XZ plane (Y=0)
     x = np.linspace(-15, 15, 300)

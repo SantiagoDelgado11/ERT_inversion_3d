@@ -38,8 +38,8 @@ def main():
     # Hiperparámetros físicos y de entrenamiento
     h5_filepath = '../forward/dataset/dataset_validation.h5'
     current_I = 1.0
-    # Relajamos epsilon a 3.0 para cumplir con el límite de Nyquist de la malla (dx=2.0)
-    epsilon = 3.0
+    # Desviación estándar de la fuente: gamma >= 2*dx (dx=2.0)
+    gamma = 4.0
     
     # Pesos de la Función de Pérdida pasados por argumento
     weights = {
@@ -59,7 +59,7 @@ def main():
         n_bc_surf=100, 
         n_bc_inf=100, 
         n_flux=50, 
-        epsilon=epsilon
+        epsilon=gamma
     )
     
     # Batch size 1 es usual en PINNs 3D debido al altísimo costo del Hessiano
@@ -99,7 +99,7 @@ def main():
         reg_samples=reg_samples,
         weights=weights,
         current_I=current_I,
-        epsilon=epsilon,
+        gamma=gamma,
         num_epochs_adam=1000,
         num_epochs_lbfgs=500,
         lr=1e-3,
