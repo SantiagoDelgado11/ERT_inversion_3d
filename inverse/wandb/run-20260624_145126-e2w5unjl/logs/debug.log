@@ -1,0 +1,24 @@
+2026-06-24 14:51:26,727 INFO    MainThread:7972 [wandb_setup.py:_flush():81] Current SDK version is 0.26.1
+2026-06-24 14:51:26,727 INFO    MainThread:7972 [wandb_setup.py:_flush():81] Configure stats pid to 7972
+2026-06-24 14:51:26,727 INFO    MainThread:7972 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-06-24 14:51:26,727 INFO    MainThread:7972 [wandb_init.py:setup_run_log_directory():723] Logging user logs to C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\wandb\run-20260624_145126-e2w5unjl\logs\debug.log
+2026-06-24 14:51:26,727 INFO    MainThread:7972 [wandb_init.py:setup_run_log_directory():724] Logging internal logs to C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\wandb\run-20260624_145126-e2w5unjl\logs\debug-internal.log
+2026-06-24 14:51:26,728 INFO    MainThread:7972 [wandb_init.py:init():850] calling init triggers
+2026-06-24 14:51:26,728 INFO    MainThread:7972 [wandb_init.py:init():855] wandb.init called with sweep_config: {}
+config: {'w_data': 1.0, 'w_pde': 0.0001, 'w_bc': 10.0, 'w_reg': 0.1, 'w_flux': 0.01, '_wandb': {}}
+2026-06-24 14:51:26,728 INFO    MainThread:7972 [wandb_init.py:init():898] starting backend
+2026-06-24 14:51:29,061 INFO    MainThread:7972 [wandb_init.py:init():913] sending inform_init request
+2026-06-24 14:51:31,140 INFO    MainThread:7972 [wandb_init.py:init():918] backend started and connected
+2026-06-24 14:51:31,179 INFO    MainThread:7972 [wandb_init.py:init():988] updated telemetry
+2026-06-24 14:51:31,223 INFO    MainThread:7972 [wandb_init.py:init():1011] communicating run to backend with 90.0 second timeout
+2026-06-24 14:51:31,520 INFO    MainThread:7972 [wandb_init.py:init():1056] starting run threads in backend
+2026-06-24 14:51:31,828 INFO    MainThread:7972 [wandb_run.py:_console_start():2554] atexit reg
+2026-06-24 14:51:31,828 INFO    MainThread:7972 [wandb_run.py:_redirect():2403] redirect: wrap_raw
+2026-06-24 14:51:31,828 INFO    MainThread:7972 [wandb_run.py:_redirect():2472] Wrapping output streams.
+2026-06-24 14:51:31,828 INFO    MainThread:7972 [wandb_run.py:_redirect():2495] Redirects installed.
+2026-06-24 14:51:31,835 INFO    MainThread:7972 [wandb_init.py:init():1094] run started, returning control to user process
+2026-06-24 15:10:41,302 INFO    MainThread:7972 [wandb_run.py:_finish():2321] finishing run santiago2192694-universidad-industrial-de-santander/ERT_PINN_3D/e2w5unjl
+2026-06-24 15:10:41,303 INFO    MainThread:7972 [wandb_run.py:_atexit_cleanup():2520] got exitcode: 0
+2026-06-24 15:10:41,304 INFO    MainThread:7972 [wandb_run.py:_restore():2502] restore
+2026-06-24 15:10:41,304 INFO    MainThread:7972 [wandb_run.py:_restore():2508] restore done
+2026-06-24 15:10:43,012 INFO    MainThread:7972 [wandb_run.py:_footer_sync_info():3889] logging synced files

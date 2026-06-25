@@ -106,5 +106,5 @@ class ERTDataset(Dataset):
             'bc_neumann': {'r_N': r_N},
             'bc_dirichlet': {'r_D': r_D},
             'flux': {'r_Bc_A': r_Bc_A, 'n_Bc_A': n_Bc_A, 'r_Bc_B': r_Bc_B, 'n_Bc_B': n_Bc_B, 'area_Bc': area_Bc},
-            'reg': {'r_reg': r_pde.clone()} # Reutilizamos puntos PDE para la penalización TV
+            'reg': {'r_reg': self._sample_uniform(bounds_pde, self.n_pde)} # Puntos independientes para la penalización TV (N_Omega)
         }

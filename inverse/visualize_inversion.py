@@ -33,7 +33,6 @@ def main():
         sigma_pred = sigma_net(coords_tensor).cpu().numpy().flatten()
     
     # 4. Convertir a resistividad
-    sigma_pred = np.clip(sigma_pred, 1e-5, None)
     rho_pred = 1.0 / sigma_pred
     rho_3d = rho_pred.reshape((nx, ny, nz))
     
@@ -46,7 +45,7 @@ def main():
     axes[0].set_title(f'Corte Horizontal (XY) en Z = {z[idx_z]:.1f}')
     axes[0].set_xlabel('X')
     axes[0].set_ylabel('Y')
-    fig.colorbar(im0, ax=axes[0], label='Resistividad ($\Omega\cdot m$)')
+    fig.colorbar(im0, ax=axes[0], label=r'Resistividad ($\Omega\cdot m$)')
     
     # Corte Vertical (XZ)
     idx_y = ny // 2 # Y=0
@@ -54,7 +53,7 @@ def main():
     axes[1].set_title(f'Corte Frontal (XZ) en Y = {y[idx_y]:.1f}')
     axes[1].set_xlabel('X')
     axes[1].set_ylabel('Z')
-    fig.colorbar(im1, ax=axes[1], label='Resistividad ($\Omega\cdot m$)')
+    fig.colorbar(im1, ax=axes[1], label=r'Resistividad ($\Omega\cdot m$)')
     
     # Corte Lateral (YZ)
     idx_x = nx // 2 # X=0
@@ -62,7 +61,7 @@ def main():
     axes[2].set_title(f'Corte Lateral (YZ) en X = {x[idx_x]:.1f}')
     axes[2].set_xlabel('Y')
     axes[2].set_ylabel('Z')
-    fig.colorbar(im2, ax=axes[2], label='Resistividad ($\Omega\cdot m$)')
+    fig.colorbar(im2, ax=axes[2], label=r'Resistividad ($\Omega\cdot m$)')
     
     plt.tight_layout()
     out_file = 'inversion_result.png'

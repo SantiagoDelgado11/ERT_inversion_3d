@@ -100,8 +100,8 @@ def main():
         weights=weights,
         current_I=current_I,
         gamma=gamma,
-        num_epochs_adam=1000,
-        num_epochs_lbfgs=500,
+        num_epochs_adam=5000,
+        num_epochs_lbfgs=0,
         lr=1e-3,
         device=device,
         use_wandb=True

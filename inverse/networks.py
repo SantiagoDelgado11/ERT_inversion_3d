@@ -65,10 +65,10 @@ class ConductivityNet(nn.Module):
         """
         ff = self.fourier_map(coords)
         out = self.mlp(ff)
-        # Forzamos conductividad estrictamente positiva y escalada
-        # Mapeo Exponencial: Previene saltos abruptos y limita el rango de gradientes
-        sigma_ref = 0.01 # Equivalente a 100 Ohm.m background
-        sigma = sigma_ref * torch.exp(out)
+        # 1. Positividad Estricta por Construcción y Límite Geológico
+        # Limitamos sigma_min a 1e-3 para prevenir resistividades > 1000 Ohm.m
+        sigma_min = 1e-3
+        sigma = F.softplus(out) + sigma_min
         return sigma
 
 class PotentialNet(nn.Module):

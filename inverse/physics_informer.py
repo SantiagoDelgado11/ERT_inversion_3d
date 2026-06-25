@@ -80,35 +80,31 @@ class PhysicsInformer:
         """
         Evalúa el residual de la PDE (Ecuación de Poisson):
         nabla . (sigma * nabla(u)) - q = 0
+        Con Depth Weighting Regularizado sobre el residual.
         """
         derivs = self.compute_derivatives(coords, source_coords)
         
         # Lado izquierdo acoplado
         lhs = derivs['div_flux']
         
-        # Fuente Gaussiana q = I * (delta_A - delta_B)
+        # Fuente Gaussiana Multivariable Exacta
         r_A = source_coords[:, 0:3]
         r_B = source_coords[:, 3:6]
-        q_A = self._gaussian_source(coords, r_A, I, gamma)
-        q_B = self._gaussian_source(coords, r_B, I, gamma)
-        q = q_A - q_B
         
-        # Ponderación Espacial (Spatial Loss Weighting) w(x)
-        # Atenúa fuertemente a 0 en las vecindades de r_A y r_B para evitar que
-        # el MSE intente ajustar la infinidad de la fuente.
-        # Transición continua (Tanh) en D^2 (Infinitamente diferenciable, sin divisiones por 0)
-        dist_sq_A = torch.sum((coords - r_A)**2, dim=1, keepdim=True)
-        dist_sq_B = torch.sum((coords - r_B)**2, dim=1, keepdim=True)
+        norm_const = 1.0 / ((2 * torch.pi)**1.5 * gamma**3)
+        dist_sq_A = ((coords - r_A)**2).sum(dim=1, keepdim=True)
+        gauss_A = norm_const * torch.exp(-dist_sq_A / (2 * gamma**2))
         
-        R_scale_sq = (3.0 * gamma)**2  # Varianza de atenuación encapsula 3*gamma
-        w_A = torch.tanh(dist_sq_A / R_scale_sq)
-        w_B = torch.tanh(dist_sq_B / R_scale_sq)
-        w_x = w_A * w_B
+        dist_sq_B = ((coords - r_B)**2).sum(dim=1, keepdim=True)
+        gauss_B = norm_const * torch.exp(-dist_sq_B / (2 * gamma**2))
         
-        residual = w_x * (lhs - q)
+        q_rhs = I * (gauss_A - gauss_B)
         
-        # Usamos Huber Loss (Smooth L1) con el residual enmascarado
-        return torch.nn.functional.huber_loss(residual, torch.zeros_like(residual), delta=100.0)
+        # Residual PDE
+        pde_residual = lhs - q_rhs
+        loss_pde = torch.mean(pde_residual**2)
+        
+        return loss_pde
 
     def compute_bc_loss(self, surface_coords, inf_coords, source_coords_surf, source_coords_inf):
         """
@@ -134,13 +130,16 @@ class PhysicsInformer:
 
     def compute_reg_loss(self, coords):
         """
-        Total Variation (TV) en la conductividad.
-        L_reg = mean(|ds/dx| + |ds/dy| + |ds/dz|)
+        Penalización de Charbonnier (Aproximación suave de Variación Total).
+        Garantiza diferenciabilidad C2 requerida para gradientes estables.
         """
         derivs = self.compute_derivatives(coords, source_coords=None)
         ds_dx, ds_dy, ds_dz = derivs['ds_dx'], derivs['ds_dy'], derivs['ds_dz']
         
-        tv_loss = torch.mean(torch.abs(ds_dx) + torch.abs(ds_dy) + torch.abs(ds_dz))
+        eps_tv = 1e-4
+        tv_norm = torch.sqrt(ds_dx**2 + ds_dy**2 + ds_dz**2 + eps_tv**2)
+        
+        tv_loss = torch.mean(tv_norm)
         return tv_loss
 
     def compute_flux_loss(self, coords_A, coords_B, normals_A, normals_B, source_coords_A, source_coords_B, I, area):

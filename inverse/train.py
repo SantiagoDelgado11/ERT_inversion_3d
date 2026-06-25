@@ -27,8 +27,9 @@ def train_pinn(
     u_net = u_net.to(device)
     sigma_net = sigma_net.to(device)
     
-    # 1. Optimizador Adam para exploración macroscópica
+    # 1. Optimizador Adam para todo el entrenamiento
     optimizer_adam = optim.Adam(list(u_net.parameters()) + list(sigma_net.parameters()), lr=lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_adam, T_max=num_epochs_adam)
     
     def prepare(tensor: torch.Tensor, requires_grad: bool = False):
         t = tensor.to(device)
@@ -55,8 +56,12 @@ def train_pinn(
     
     r_reg = prepare(reg_samples['r_reg'], requires_grad=True)
     
-    dyn_w = {'pde': 1.0, 'bc': 100.0, 'flux': 10.0, 'reg': 1.0}
-    alpha_lra = 0.9
+    # Usaremos escalado explícito estricto
+    lambda_pde = 1.0
+    lambda_bc = 1.0      # CRÍTICO: Debe ser fuerte para evitar fugas de corriente (Fantasmas)
+    lambda_flux = 1.0    # CRÍTICO: Conservación de carga inyectada
+    lambda_reg = 1e-4
+    lambda_bg = 1e-5
     
     loss_dict = {}
 
@@ -65,7 +70,26 @@ def train_pinn(
         if torch.is_grad_enabled():
             optimizer_adam.zero_grad()
             
-        # Data loss empírico
+        # Warm-up (Homogeneidad Base)
+        # Forzar sigma a un background homogéneo (100 Ohm.m -> 0.01 S/m) durante las primeras 500 épocas
+        if epoch <= 500:
+            sigma_pred = sigma_net(r_reg)
+            loss_warmup = torch.mean((sigma_pred - 0.01)**2)
+            loss_total = loss_warmup
+            
+            # Limpiar otros losses para evitar retropropagación y mantener logs
+            loss_dict = {
+                "loss_data": 0.0, "loss_pde": 0.0, "loss_bc": 0.0,
+                "loss_reg": 0.0, "loss_flux": 0.0, "loss_total": loss_total.item(),
+                "lambda_pde": lambda_pde, "lambda_bc": lambda_bc, "lambda_flux": lambda_flux, "lambda_reg": lambda_reg
+            }
+            if loss_total.requires_grad:
+                loss_total.backward()
+                torch.nn.utils.clip_grad_norm_(list(sigma_net.parameters()), max_norm=1.0)
+            return loss_total
+            
+        # Entrenamiento Físico Normal (Post Warm-up)
+        # Data loss empírico con Depth Weighting
         if 'source' in data_samples:
             source_data = prepare(data_samples['source'])
             u_pred = u_net(r_m, source_data)
@@ -82,7 +106,11 @@ def train_pinn(
             w_data_B = torch.tanh(dist_sq_B_m / R_scale_sq)
             w_data_mask = w_data_A * w_data_B
             
-            loss_data = torch.mean(w_data_mask * (u_pred - u_star)**2)
+            # Depth Weighting en Data Loss para prevenir overfitting de superficie
+            z_data = r_m[:, 2:3]
+            W_z_data = 1.0 / (torch.abs(z_data) + 2.0)**2.0
+            
+            loss_data = torch.mean(W_z_data * w_data_mask * (u_pred - u_star)**2)
         else:
             loss_data = torch.tensor(0.0, device=device)
 
@@ -104,45 +132,20 @@ def train_pinn(
             current_I, area_Bc
         )
         
-        # Learning Rate Annealing (Wang et al., 2021)
-        if not is_lbfgs and loss_data.requires_grad and epoch % 10 == 0:
-            last_layer_u = u_net.mlp.network[-1].weight
-            grad_data = torch.autograd.grad(loss_data, last_layer_u, retain_graph=True)[0]
-            max_grad_data = torch.max(torch.abs(grad_data)) + 1e-8
-            
-            def update_dyn_w(key, loss_term):
-                if loss_term.requires_grad:
-                    grad_term = torch.autograd.grad(loss_term, last_layer_u, retain_graph=True)[0]
-                    mean_grad_term = torch.mean(torch.abs(grad_term)) + 1e-8
-                    hat_lambda = max_grad_data / mean_grad_term
-                    # Clipping de lambda estricto para evitar multiplicadores infinitos
-                    hat_lambda = torch.clamp(hat_lambda, max=100.0)
-                    dyn_w[key] = alpha_lra * dyn_w[key] + (1.0 - alpha_lra) * hat_lambda.item()
-            
-            update_dyn_w('pde', loss_pde)
-            update_dyn_w('bc', loss_bc)
-            update_dyn_w('flux', loss_flux)
-            
-            last_layer_sigma = sigma_net.mlp.network[-1].weight
-            if loss_reg.requires_grad and loss_pde.requires_grad:
-                try:
-                    grad_pde_sigma = torch.autograd.grad(loss_pde, last_layer_sigma, retain_graph=True, allow_unused=True)[0]
-                    grad_reg = torch.autograd.grad(loss_reg, last_layer_sigma, retain_graph=True, allow_unused=True)[0]
-                    if grad_pde_sigma is not None and grad_reg is not None:
-                        max_grad_pde_sigma = torch.max(torch.abs(grad_pde_sigma)) + 1e-8
-                        mean_grad_reg = torch.mean(torch.abs(grad_reg)) + 1e-8
-                        hat_lambda_reg = max_grad_pde_sigma / mean_grad_reg
-                        hat_lambda_reg = torch.clamp(hat_lambda_reg, max=100.0)
-                        dyn_w['reg'] = alpha_lra * dyn_w['reg'] + (1.0 - alpha_lra) * hat_lambda_reg.item()
-                except Exception:
-                    pass
+        # Regularización de Tikhonov hacia el Background
+        sigma_pred_reg = sigma_net(r_reg)
+        z_reg = r_reg[:, 2:3]
+        # Baseline de 1.0 en todo el dominio + castigo severo en la superficie
+        W_z_reg = 1.0 + 10.0 / (torch.abs(z_reg) + 1.0)
+        loss_bg = torch.mean(W_z_reg * (sigma_pred_reg - 0.01)**2)
 
-        # Suma ponderada con pesos dinámicos y base
+        # Suma ponderada con escalado manual estricto (Normalización)
         loss_total = (weights.get('w_data', 1.0) * loss_data +
-                      dyn_w['pde'] * loss_pde +
-                      dyn_w['bc'] * loss_bc +
-                      dyn_w['reg'] * loss_reg +
-                      dyn_w['flux'] * loss_flux)
+                      lambda_pde * loss_pde +
+                      lambda_bc * loss_bc +
+                      lambda_reg * loss_reg +
+                      lambda_flux * loss_flux +
+                      lambda_bg * loss_bg)
                       
         loss_dict = {
             "loss_data": loss_data.item(),
@@ -150,11 +153,13 @@ def train_pinn(
             "loss_bc": loss_bc.item(),
             "loss_reg": loss_reg.item(),
             "loss_flux": loss_flux.item(),
+            "loss_bg": loss_bg.item(),
             "loss_total": loss_total.item(),
-            "lambda_pde": dyn_w['pde'],
-            "lambda_bc": dyn_w['bc'],
-            "lambda_flux": dyn_w['flux'],
-            "lambda_reg": dyn_w['reg']
+            "lambda_pde": lambda_pde,
+            "lambda_bc": lambda_bc,
+            "lambda_flux": lambda_flux,
+            "lambda_reg": lambda_reg,
+            "lambda_bg": lambda_bg
         }
 
         if loss_total.requires_grad:
@@ -164,35 +169,22 @@ def train_pinn(
             
         return loss_total
 
-    # --- Fase 1: Adam ---
-    print("Iniciando Fase 1: Entrenamiento inicial con Adam")
-    is_lbfgs = False
+    # --- Entrenamiento Acoplado con Adam ---
+    print("Iniciando Entrenamiento Acoplado exclusivamente con Adam")
     pbar_adam = tqdm(range(num_epochs_adam), desc="Adam")
     for epoch in pbar_adam:
-        # Warm-up lineal de 500 pasos
-        warmup_steps = 500
-        current_lr = lr * min(1.0, (epoch + 1) / warmup_steps)
-        for param_group in optimizer_adam.param_groups:
-            param_group['lr'] = current_lr
+        # Warm-up lineal de learning rate en las primeras 500 iteraciones
+        if epoch < 500:
+            current_lr = lr * min(1.0, (epoch + 1) / 500)
+            for param_group in optimizer_adam.param_groups:
+                param_group['lr'] = current_lr
+        else:
+            scheduler.step()
+            current_lr = scheduler.get_last_lr()[0]
             
         optimizer_adam.step(closure)
         if use_wandb:
             wandb.log({"epoch_adam": epoch, "lr_adam": current_lr, **loss_dict})
         pbar_adam.set_postfix(loss=f"{loss_dict.get('loss_total', 0):.4e}")
-
-    # --- Fase 2: L-BFGS ---
-    print("Iniciando Fase 2: Ajuste fino con L-BFGS")
-    is_lbfgs = True
-    optimizer_lbfgs = optim.LBFGS(
-        list(u_net.parameters()) + list(sigma_net.parameters()),
-        lr=1.0, max_iter=20, tolerance_grad=1e-7, tolerance_change=1e-9, history_size=50
-    )
-    
-    pbar_lbfgs = tqdm(range(num_epochs_lbfgs), desc="L-BFGS")
-    for epoch in pbar_lbfgs:
-        optimizer_lbfgs.step(closure)
-        if use_wandb:
-            wandb.log({"epoch_lbfgs": epoch, **loss_dict})
-        pbar_lbfgs.set_postfix(loss=f"{loss_dict.get('loss_total', 0):.4e}")
 
     return u_net, sigma_net

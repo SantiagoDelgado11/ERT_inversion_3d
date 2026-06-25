@@ -1,0 +1,1 @@
+{"_wandb":{"runtime":503},"loss_pde":NaN,"loss_reg":NaN,"loss_flux":NaN,"loss_bc":NaN,"loss_data":NaN,"lambda_reg":1,"epoch_lbfgs":110,"lambda_bc":100,"_timestamp":1.7823248548429456e+09,"lr_adam":0.001,"lambda_pde":99.4330847271948,"loss_total":NaN,"lambda_flux":99.484622479268,"_step":1110,"epoch_adam":999,"_runtime":503}
