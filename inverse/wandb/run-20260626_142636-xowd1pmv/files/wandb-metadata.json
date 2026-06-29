@@ -1,0 +1,17 @@
+{
+  "os":  "Windows-11-10.0.26200-SP0",
+  "python":  "CPython 3.13.12",
+  "startedAt":  "2026-06-26T19:26:36.973421Z",
+  "program":  "C:\\Users\\Doc\\Downloads\\ERT_inversion_3d\\inverse\\run_training.py",
+  "codePath":  "inverse\\run_training.py",
+  "codePathLocal":  "run_training.py",
+  "git":  {
+    "remote":  "https://github.com/SantiagoDelgado11/ERT_inversion_3d.git",
+    "commit":  "7f6e2d53fd4b89bd9aedbb4f80d934805040a840"
+  },
+  "email":  "santiago2192694@correo.uis.edu.co",
+  "root":  "C:\\Users\\Doc\\Downloads\\ERT_inversion_3d\\inverse",
+  "host":  "DESKTOP-T7K8O68",
+  "executable":  "C:\\Users\\Doc\\miniconda3\\python.exe",
+  "writerId":  "6aayu9ya21zns4fkibzztbkrhi9ptrib"
+}

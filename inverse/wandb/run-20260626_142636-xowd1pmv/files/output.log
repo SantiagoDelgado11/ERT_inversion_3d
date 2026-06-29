@@ -1,0 +1,18 @@
+Iniciando entrenamiento en: cpu
+Cargando dataset y generando puntos de colocación físicos...
+Iniciando amortización / sobreajuste físico en el primer batch...
+Traceback (most recent call last):
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\run_training.py", line 134, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\Doc\Downloads\ERT_inversion_3d\inverse\run_training.py", line 103, in main
+    trained_pot_net, trained_m_net = train_pinn(
+                                     ~~~~~~~~~~^
+        u_net=pot_net,
+        ^^^^^^^^^^^^^^
+    ...<19 lines>...
+        use_wandb=True
+        ^^^^^^^^^^^^^^
+    )
+    ^
+TypeError: train_pinn() got an unexpected keyword argument 'num_epochs_lbfgs'. Did you mean 'num_epochs_adam'?

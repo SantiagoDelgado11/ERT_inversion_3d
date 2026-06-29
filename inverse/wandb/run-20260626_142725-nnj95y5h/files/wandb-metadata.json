@@ -1,0 +1,40 @@
+{
+  "os":  "Windows-11-10.0.26200-SP0",
+  "python":  "CPython 3.13.12",
+  "startedAt":  "2026-06-26T19:27:25.235849Z",
+  "program":  "C:\\Users\\Doc\\Downloads\\ERT_inversion_3d\\inverse\\run_training.py",
+  "codePath":  "inverse\\run_training.py",
+  "codePathLocal":  "run_training.py",
+  "git":  {
+    "remote":  "https://github.com/SantiagoDelgado11/ERT_inversion_3d.git",
+    "commit":  "7f6e2d53fd4b89bd9aedbb4f80d934805040a840"
+  },
+  "email":  "santiago2192694@correo.uis.edu.co",
+  "root":  "C:\\Users\\Doc\\Downloads\\ERT_inversion_3d\\inverse",
+  "host":  "DESKTOP-T7K8O68",
+  "executable":  "C:\\Users\\Doc\\miniconda3\\python.exe",
+  "cpu_count":  8,
+  "cpu_count_logical":  16,
+  "gpu":  "NVIDIA GeForce RTX 5050 Laptop GPU",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "511056015360",
+      "used":  "120886194176"
+    }
+  },
+  "memory":  {
+    "total":  "16435761152"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 5050 Laptop GPU",
+      "memoryTotal":  "8546942976",
+      "cudaCores":  2560,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-d534b75c-370f-f7c7-22ba-86996c37a9ef"
+    }
+  ],
+  "cudaVersion":  "13.2",
+  "writerId":  "u6ovdktbyvc47hnycbpdxnv7e3rq6bus"
+}
