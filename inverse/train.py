@@ -3,7 +3,6 @@ import torch.optim as optim
 from typing import Dict, Any
 import wandb
 from tqdm import tqdm
-import math
 
 def train_pinn(
     u_net: torch.nn.Module, 
