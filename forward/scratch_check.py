@@ -6,8 +6,13 @@ def check_h5(filepath):
         with h5py.File(filepath, 'r') as f:
             print(f"--- HDF5 File: {filepath} ---")
             print("Apparent Resistivity shape:", f['inputs/apparent_resistivity'].shape)
+            if 'inputs/delta_v' in f:
+                print("Delta V shape:", f['inputs/delta_v'].shape)
             print("Electrode positions shape:", f['inputs/electrode_positions'].shape)
-            print("True Resistivity 3D shape:", f['labels/true_resistivity_3d'].shape)
+            if 'labels/true_conductivity_3d' in f:
+                print("True Conductivity 3D shape:", f['labels/true_conductivity_3d'].shape)
+            if 'labels/true_resistivity_3d' in f:
+                print("Legacy mislabeled Conductivity 3D shape:", f['labels/true_resistivity_3d'].shape)
     except Exception as e:
         print(f"Error reading {filepath}: {e}")
 

@@ -19,7 +19,10 @@ def solve_forward(mesh, sigma, source_pairs, electrodes, config_path="configs/su
     # 1. Build the A matrix (Laplacian with appropriate BCs)
     # Simulation3DNodal handles the Neumann BC at the surface (z=0)
     # and Dirichlet BC at the padded boundaries automatically.
-    sim = dc.Simulation3DNodal(mesh, sigma=sigma)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*pymatsolver\.SolverLU.*")
+        sim = dc.Simulation3DNodal(mesh, sigma=sigma)
     A = sim.getA()
     
     nodes = mesh.nodes

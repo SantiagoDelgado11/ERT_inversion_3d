@@ -18,6 +18,12 @@ ert_pinn_framework/.venv/
 # Experiment artifacts and generated outputs
 outputs/
 ert_pinn_framework/outputs/
+*.h5
+*.pth
+*.wandb
+*.png
+wandb/
+inverse/wandb/
 
 # Local editor settings
 .vscode/

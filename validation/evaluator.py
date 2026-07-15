@@ -126,7 +126,10 @@ class ValidationPipeline:
         # 2. Evaluate PINN conductivity and potential at those mesh points
         pts_tensor = torch.tensor(mesh_points, dtype=torch.float32, device=self.device)
         pinn_cond = self.conductivity_net(pts_tensor).cpu().numpy().flatten()
-        pinn_pot = self.potential_net(pts_tensor).cpu().numpy().flatten()
+        pos_A, pos_B = current_electrodes
+        source_np = np.concatenate([pos_A, pos_B]).astype(np.float32)
+        source_tensor = torch.tensor(source_np, dtype=torch.float32, device=self.device).unsqueeze(0).repeat(pts_tensor.shape[0], 1)
+        pinn_pot = self.potential_net(pts_tensor, source_tensor).cpu().numpy().flatten()
         
         # 3. Setup solver physics (Source and BCs)
         source_term = self.forward_solver.assemble_gaussian_source(current_electrodes, source_width)

@@ -3,7 +3,7 @@ import torch
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
-from networks import ConductivityNet
+from models import ConductivityNet
 
 def main():
     print("=== Generando Perfiles 1D de Inversión ===")
@@ -16,8 +16,8 @@ def main():
         return
 
     with h5py.File(h5_filepath, 'r') as f:
-        # Extraemos el tensor (en realidad es conductividad, a pesar del nombre en el h5)
-        sigma_true_grid = f['labels/true_resistivity_3d'][0]
+        label_key = 'labels/true_conductivity_3d' if 'labels/true_conductivity_3d' in f else 'labels/true_resistivity_3d'
+        sigma_true_grid = f[label_key][0]
 
     # Convertir a resistividad
     rho_true_grid = 1.0 / sigma_true_grid

@@ -1,7 +1,9 @@
 import torch
 import numpy as np
+import matplotlib
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
-from networks import ConductivityNet
+from models import ConductivityNet
 import os
 
 def main():
@@ -67,6 +69,7 @@ def main():
     out_file = 'inversion_result.png'
     plt.savefig(out_file, dpi=300)
     print(f"Imagen guardada exitosamente en {out_file}")
+    plt.show()
 
 if __name__ == '__main__':
     main()
