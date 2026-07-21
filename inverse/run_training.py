@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--w_data", type=float, default=1.0, help="Peso para el data loss")
     parser.add_argument("--w_pde", type=float, default=1e-4, help="Peso para el PDE loss")
     parser.add_argument("--w_bc", type=float, default=10.0, help="Peso para condiciones de frontera")
-    parser.add_argument("--w_reg", type=float, default=0.1, help="Peso de regularizacion TV")
+    parser.add_argument("--w_reg", type=float, default=1e-4, help="Peso de regularizacion TV")
     parser.add_argument("--w_flux", type=float, default=1e-2, help="Peso para conservacion de flujo")
     parser.add_argument("--use_wandb", action="store_true", help="Activar logging en Weights & Biases")
     parser.add_argument("--wandb_project", type=str, default="ERT_PINN_3D")
@@ -50,7 +50,7 @@ def main():
     print(f"Iniciando entrenamiento en: {device}")
 
     repo_root = Path(__file__).resolve().parents[1]
-    h5_filepath = repo_root / "forward" / "ert3d_level1_single_sphere_1000.h5"
+    h5_filepath = repo_root / "forward" / "ert3d_dataset_final.h5"
     current_I = 1.0
     gamma = 4.0
 
@@ -71,7 +71,11 @@ def main():
         n_flux=50,
         epsilon=gamma,
     )
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+    
+    # IMPORTANTE: Para una inversión PINN, solo debemos entrenar sobre UN conjunto 
+    # de mediciones (un "survey" específico). Extraemos la primera muestra (idx=0).
+    subset = torch.utils.data.Subset(dataset, [0])
+    dataloader = DataLoader(subset, batch_size=1, shuffle=True)
 
     sigma_net = ConductivityNet(hidden_layers=4, hidden_dim=128).to(device)
     pot_net = PotentialNet().to(device)
@@ -86,7 +90,7 @@ def main():
         weights=weights,
         current_I=current_I,
         gamma=gamma,
-        num_epochs_adam=500,
+        num_epochs_adam=1000,
         num_epochs_lbfgs=1000,
         lr=1e-3,
         device=device,

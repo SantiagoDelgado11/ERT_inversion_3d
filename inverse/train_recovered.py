@@ -253,8 +253,9 @@ def train_pinn(
 
             # (a) Warm-up de m_net: m(x) → m₀ = ln(σ₀)
             optimizer_m.zero_grad()
-            m_pred = m_net(r_reg)
-            loss_warmup = torch.mean((m_pred - m0)**2)
+            sigma_pred = m_net(r_reg)
+            # m_net (ConductivityNet) retorna sigma directamente, así que tomamos log()
+            loss_warmup = torch.mean((torch.log(sigma_pred + 1e-12) - m0)**2)
             loss_warmup.backward()
             torch.nn.utils.clip_grad_norm_(m_net.parameters(), max_norm=1.0)
             optimizer_m.step()

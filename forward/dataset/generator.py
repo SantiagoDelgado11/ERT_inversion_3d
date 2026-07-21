@@ -2,7 +2,7 @@ import numpy as np
 import yaml
 from mesh.mesh_generator import generate_mesh
 from geology.conductivity_models import build_conductivity_model
-from survey.electrodes import generate_surface_electrodes
+from survey.electrodes import generate_surface_electrode_grid
 from survey.wenner import generate_wenner
 from survey.schlumberger import generate_schlumberger
 from survey.dipole_dipole import generate_dipole_dipole
@@ -38,24 +38,30 @@ def generate_single_sample(seed=None, mesh=None, config_geology=None, config_sur
         
     sigma, anomalies = build_conductivity_model(mesh, config_geology)
     
-    electrodes = generate_surface_electrodes(
-        num_electrodes=config_survey['num_electrodes'],
-        spacing=config_survey['electrode_spacing'],
-        center_x=0.0
+    electrodes = generate_surface_electrode_grid(
+        num_x=config_survey['num_electrodes_x'],
+        num_y=config_survey['num_lines'],
+        spacing_x=config_survey['electrode_spacing_x'],
+        spacing_y=config_survey['electrode_spacing_y'],
+        center_x=0.0,
+        center_y=0.0
     )
     
     # Build complete sequence
     sequence = []
+    num_x = config_survey['num_electrodes_x']
+    num_y = config_survey['num_lines']
+    
     if config_survey['arrays'].get('wenner', {}).get('active', False):
-        sequence.extend(generate_wenner(len(electrodes)))
+        sequence.extend(generate_wenner(num_x, num_y))
     if config_survey['arrays'].get('schlumberger', {}).get('active', False):
-        sequence.extend(generate_schlumberger(len(electrodes)))
+        sequence.extend(generate_schlumberger(num_x, num_y))
     if config_survey['arrays'].get('dipole_dipole', {}).get('active', False):
         max_n = config_survey['arrays']['dipole_dipole'].get('max_n', 8)
-        sequence.extend(generate_dipole_dipole(len(electrodes), max_n))
+        sequence.extend(generate_dipole_dipole(num_x, num_y, max_n))
     if config_survey['arrays'].get('pole_dipole', {}).get('active', False):
         max_n = config_survey['arrays']['pole_dipole'].get('max_n', 8)
-        sequence.extend(generate_pole_dipole(len(electrodes), max_n))
+        sequence.extend(generate_pole_dipole(num_x, num_y, max_n))
         
     source_pairs, measurement_sequences = group_by_source(sequence)
     

@@ -4,9 +4,11 @@ survey:
   # A good rule of thumb is 1-2 times the cell size adjacent to the electrode.
   epsilon: 2.5
 
-  # Base survey line configuration
-  electrode_spacing: 2.0  # meters
-  num_electrodes: 41      # 80 meters total length (if placed at origin to 80)
+  # Base survey grid configuration
+  electrode_spacing_x: 2.0  # meters
+  electrode_spacing_y: 4.0  # meters
+  num_electrodes_x: 21      # 40 meters total length in X
+  num_lines: 5              # 16 meters total length in Y
   
   # Arrays to generate sequences for
   # Supported: wenner, schlumberger, dipole-dipole, pole-dipole

@@ -4,35 +4,34 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 
-class MultiScaleFourierEncoding(nn.Module):
+class PositionalEncoding(nn.Module):
     """
-    Mapeo de Características de Fourier Multiescala.
-    Permite a la red aprender diferentes frecuencias espaciales concatenando
-    las proyecciones en múltiples escalas.
+    Random Fourier Features (RFF) Positional Encoding.
+    Evita el sesgo a ejes ortogonales (Grid Bias) de la codificación NeRF estándar,
+    permitiendo que la red aprenda formas esféricas e isotrópicas.
     """
-    def __init__(self, in_features: int, mapping_size: int, scales: List[float], domain_scale: float = 50.0):
+    def __init__(self, in_features: int, num_frequencies: int = 10, domain_scale: float = 50.0, sigma_rff: float = 1.0):
         super().__init__()
         self.in_features = in_features
-        self.domain_scale = domain_scale
-        
-        # Distribuimos el mapping_size total entre las escalas disponibles
-        features_per_scale = max(1, mapping_size // len(scales))
-        
-        # Creamos una única matriz B para mayor eficiencia
-        B = torch.randn(in_features, features_per_scale * len(scales))
-        for i, scale in enumerate(scales):
-            start = i * features_per_scale
-            end = start + features_per_scale
-            B[:, start:end] = B[:, start:end] * scale
+        # Ajustamos a un buen número de frecuencias para 3D si viene con el valor por defecto de NeRF
+        if num_frequencies == 10:
+            num_frequencies = 64
             
+        self.num_frequencies = num_frequencies
+        self.domain_scale = domain_scale
+        self.out_features = in_features + 2 * num_frequencies
+        
+        # Matriz de proyección aleatoria fija (B) para mapear coordenadas a frecuencias isotrópicas
+        B = torch.randn(in_features, num_frequencies) * sigma_rff
         self.register_buffer('B', B)
-        self.out_features = in_features + 2 * (features_per_scale * len(scales))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Normalización espacial CRÍTICA
-        x_norm = x / self.domain_scale
-        x_proj = (2.0 * math.pi * x_norm) @ self.B
-        return torch.cat([x_norm, torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+        x_norm = (x / self.domain_scale) * torch.pi
+        
+        # Proyección en direcciones aleatorias
+        proj = torch.matmul(x_norm, self.B)
+        
+        return torch.cat([x_norm, torch.sin(proj), torch.cos(proj)], dim=-1)
 
 
 class ResidualBlock(nn.Module):
@@ -52,19 +51,23 @@ class ResidualBlock(nn.Module):
         
         # Selección de esquema de normalización
         if normalization == 'WeightNorm':
-            self.linear1 = nn.utils.weight_norm(linear1)
-            self.linear2 = nn.utils.weight_norm(linear2)
+            # Inicialización Kaiming
+            nn.init.kaiming_normal_(linear1.weight, nonlinearity='relu')
+            if linear1.bias is not None:
+                nn.init.zeros_(linear1.bias)
+                
+            # Inicializar linear2 con valores pequeños en lugar de exactamente 0
+            # para evitar gradientes nulos (vanishing gradients) en el bloque.
+            nn.init.kaiming_normal_(linear2.weight, nonlinearity='relu')
+            with torch.no_grad():
+                linear2.weight.mul_(1e-3)
+            if linear2.bias is not None:
+                nn.init.zeros_(linear2.bias)
+
+            self.linear1 = nn.utils.parametrizations.weight_norm(linear1)
+            self.linear2 = nn.utils.parametrizations.weight_norm(linear2)
             self.norm1 = nn.Identity()
             self.norm2 = nn.Identity()
-            
-            # Inicialización Kaiming
-            nn.init.kaiming_normal_(self.linear1.weight_v, nonlinearity='relu')
-            
-            # Para WeightNorm, inicializamos weight_g a 0 para que la salida sea 0
-            # Dejar weight_v aleatorio evita división por cero al calcular la norma
-            nn.init.zeros_(self.linear2.weight_g)
-            if self.linear2.bias is not None:
-                nn.init.zeros_(self.linear2.bias)
                 
         elif normalization == 'LayerNorm':
             self.linear1 = linear1
@@ -116,7 +119,7 @@ class ResidualMLP(nn.Module):
         nn.init.kaiming_normal_(input_layer.weight, nonlinearity='relu')
         
         if normalization == 'WeightNorm':
-            self.input_layer = nn.utils.weight_norm(input_layer)
+            self.input_layer = nn.utils.parametrizations.weight_norm(input_layer)
         else:
             self.input_layer = input_layer
             
@@ -146,32 +149,23 @@ class ConductivityNet(nn.Module):
     """
     def __init__(
         self, 
-        fourier_features: int = 256, 
-        fourier_scale: float = 10.0, 
+        num_frequencies: int = 10,
         hidden_layers: int = 6,  # Capacidad aumentada por defecto para 3D
         hidden_dim: int = 256,   # Capacidad aumentada por defecto para 3D
-        fourier_scales: Optional[List[float]] = None,
-        sigma_background: float = 1e-3,
-        max_log_variation: float = 5.0
+        sigma_min: float = 1e-4,
+        sigma_max: float = 1.0,
+        domain_scale: float = 50.0
     ):
         super().__init__()
-        
-        if fourier_scales is None:
-            # Escalas multiresolución por defecto, cubriendo desde variaciones suaves a anómalas
-            fourier_scales = [1.0, 5.0, 10.0, 20.0, 40.0]
             
-        self.sigma_background = sigma_background
-        self.max_log_variation = max_log_variation
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
         
-        # Almacenamos log(sigma_background) como un buffer para que resida en el device correcto 
-        # sin ser entrenable y evitar calcularlo repetidas veces en el forward().
-        self.register_buffer('log_sigma_bg', torch.tensor(math.log(sigma_background)))
-        
-        # Mapeo de (x,y,z) multiescala
-        self.fourier_map = MultiScaleFourierEncoding(
+        # Mapeo de (x,y,z) con Positional Encoding NeRF
+        self.fourier_map = PositionalEncoding(
             in_features=3, 
-            mapping_size=fourier_features, 
-            scales=fourier_scales
+            num_frequencies=num_frequencies, 
+            domain_scale=domain_scale
         )
         
         # Red Residual
@@ -190,14 +184,7 @@ class ConductivityNet(nn.Module):
         ff = self.fourier_map(coords)
         raw_output = self.mlp(ff)
         
-        # 1. Restricción Suave y Diferenciable
-        # Permite anomalías más conductivas o más resistivas sin destruir gradientes
-        delta = self.max_log_variation * torch.tanh(raw_output)
-        
-        # 2. Perturbación en el Espacio Logarítmico
-        log_sigma = self.log_sigma_bg + delta
-        
-        # 3. Positividad Estricta y Estabilidad Numérica
-        sigma = torch.exp(log_sigma)
+        # Mapeo Sigmoide estricto para evitar explosiones de resistividad
+        sigma = self.sigma_min + (self.sigma_max - self.sigma_min) * torch.sigmoid(raw_output)
         
         return sigma

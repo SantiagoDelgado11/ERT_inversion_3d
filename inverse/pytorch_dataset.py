@@ -80,6 +80,24 @@ class ERTDataset(Dataset):
         z = torch.empty(num_points, 1).uniform_(zmin, zmax)
         return torch.cat([x, y, z], dim=1)
 
+    def _sample_pde_stratified(self, bounds, num_points):
+        (xmin, xmax), (ymin, ymax), (zmin, zmax) = bounds
+        
+        # 30% puntos globales uniformes
+        n_global = int(0.3 * num_points)
+        global_pts = self._sample_uniform(bounds, n_global)
+        
+        # 70% puntos enfocados en el volumen central profundo (zona de interés)
+        n_focal = num_points - n_global
+        focal_bounds = (
+            (max(xmin, -25.0), min(xmax, 25.0)),
+            (max(ymin, -25.0), min(ymax, 25.0)),
+            (max(zmin, -30.0), min(zmax, -2.0)) # Z profundo
+        )
+        focal_pts = self._sample_uniform(focal_bounds, n_focal)
+        
+        return torch.cat([global_pts, focal_pts], dim=0)
+
     def _sample_source_coords(self, source_pool, num_points):
         idx = torch.randint(0, source_pool.shape[0], (num_points,))
         return source_pool[idx]
@@ -174,7 +192,7 @@ class ERTDataset(Dataset):
         electrode_pool = np.unique(elec_pos_np.reshape(-1, 3), axis=0)
 
         bounds_pde = ((self.x_min, self.x_max), (self.y_min, self.y_max), (self.z_min, self.z_max))
-        r_pde = self._sample_uniform(bounds_pde, self.n_pde)
+        r_pde = self._sample_pde_stratified(bounds_pde, self.n_pde)
         source_pde = self._sample_source_coords(source_pool, self.n_pde)
 
         r_neumann = self._sample_surface_excluding_electrodes(

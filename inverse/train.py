@@ -148,10 +148,14 @@ def train_pinn(
                 sub_target = data_target[idx_meas] if data_target is not None else None
                 # Evaluamos el RMSE global sin gradientes para el logueo
                 with torch.no_grad():
+                    u_pri_m_full = informer.compute_u_pri(r_m, source_data, current_I)
+                    u_tot_m_full = u_net(r_m, source_data) + u_pri_m_full
                     if r_n is not None:
-                        pred_u_full = u_net(r_m, source_data) - u_net(r_n, source_data)
+                        u_pri_n_full = informer.compute_u_pri(r_n, source_data, current_I)
+                        u_tot_n_full = u_net(r_n, source_data) + u_pri_n_full
+                        pred_u_full = u_tot_m_full - u_tot_n_full
                     else:
-                        pred_u_full = u_net(r_m, source_data)
+                        pred_u_full = u_tot_m_full
             else:
                 sub_source = source_data
                 sub_r_m = r_m
@@ -159,64 +163,26 @@ def train_pinn(
                 sub_target = data_target
                 pred_u_full = None
 
-            # 1. Pérdida estándar (ajusta u_net)
+            # 1. Pérdida estándar (ajusta u_net, que ahora predice u_sec)
+            u_sec_m = u_net(sub_r_m, sub_source)
+            u_pri_m = informer.compute_u_pri(sub_r_m, sub_source, current_I)
+            u_tot_m = u_sec_m + u_pri_m
+            
             if sub_r_n is not None:
-                pred_u = u_net(sub_r_m, sub_source) - u_net(sub_r_n, sub_source)
+                u_sec_n = u_net(sub_r_n, sub_source)
+                u_pri_n = informer.compute_u_pri(sub_r_n, sub_source, current_I)
+                u_tot_n = u_sec_n + u_pri_n
+                pred_u = u_tot_m - u_tot_n
             else:
-                pred_u = u_net(sub_r_m, sub_source)
+                pred_u = u_tot_m
 
             loss_data_u = torch.mean((pred_u - sub_target) ** 2)
 
             # 2. Pérdida de reciprocidad (ajusta sigma_net)
-            num_int_points = min(256, r_pde.shape[0])
-            idx = torch.randperm(r_pde.shape[0], device=device)[:num_int_points]
-            r_int = r_pde[idx]  # (num_int_points, 3)
-            
-            batch_size = sub_source.shape[0]
-            
-            # Estimación dinámica del volumen del dominio desde los puntos de colocación
-            x_max, x_min = r_pde[:, 0].max(), r_pde[:, 0].min()
-            y_max, y_min = r_pde[:, 1].max(), r_pde[:, 1].min()
-            z_max, z_min = r_pde[:, 2].max(), r_pde[:, 2].min()
-            v_domain = ((x_max - x_min + 1e-4) * (y_max - y_min + 1e-4) * (z_max - z_min + 1e-4))
-            
-            if sub_r_n is not None:
-                # Expansión de puntos sin chunkeo (ahora que batch_size es pequeño e.g. 64, cabe en VRAM sin problema)
-                r_int_exp = r_int.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
-                r_int_exp.requires_grad_(True)
-                
-                source_AB_exp = sub_source.unsqueeze(1).expand(-1, num_int_points, -1)
-                u_AB = u_net(r_int_exp, source_AB_exp)
-                
-                grad_u_AB = torch.autograd.grad(
-                    outputs=u_AB, inputs=r_int_exp,
-                    grad_outputs=torch.ones_like(u_AB),
-                    create_graph=True
-                )[0]
-                
-                source_MN = torch.cat([sub_r_m, sub_r_n], dim=-1)
-                source_MN_exp = source_MN.unsqueeze(1).expand(-1, num_int_points, -1)
-                u_MN = u_net(r_int_exp, source_MN_exp)
-                
-                grad_u_MN = torch.autograd.grad(
-                    outputs=u_MN, inputs=r_int_exp,
-                    grad_outputs=torch.ones_like(u_MN),
-                    create_graph=True
-                )[0]
-                
-                sigma_val = sigma_net(r_int_exp)
-                
-                dot_product = torch.sum(grad_u_AB * grad_u_MN, dim=-1, keepdim=True)
-                integrand = sigma_val * dot_product
-                
-                current_t = torch.as_tensor(current_I, dtype=torch.float32, device=device)
-                current_t = torch.clamp(current_t, min=1e-6)
-                
-                pred_reciprocity = (v_domain / current_t) * torch.mean(integrand, dim=1)
-                
-                loss_data_sigma = torch.mean((pred_reciprocity - sub_target) ** 2)
-            else:
-                loss_data_sigma = torch.tensor(0.0, device=device)
+            # Desactivada temporalmente: La integral de Monte Carlo sobre todo el volumen 
+            # tiene varianza infinita cerca de las singularidades de los electrodos, 
+            # causando colapso en sigma_net.
+            loss_data_sigma = torch.tensor(0.0, device=device, requires_grad=True)
 
             # Devolvemos las predicciones completas para el logging (RMSE) si aplicó subsampling
             final_pred = pred_u_full if pred_u_full is not None else pred_u
@@ -246,29 +212,20 @@ def train_pinn(
             grad_norm_sigma_data = math.sqrt(grad_norm_sigma_data)
 
         # Implementación de ponderación adaptativa basada en la magnitud de gradientes (Wang et al. 2021)
-        # Calcula los gradientes de L_pde y L_data con respecto a los parámetros de la red
         if loss_pde.requires_grad and loss_data_u.requires_grad:
-            # Utilizamos los parámetros de u_net para evaluar la patología
-            target_params = list(u_net.parameters())
-            grad_pde = torch.autograd.grad(loss_pde, target_params, retain_graph=True, allow_unused=True)
-            grad_data = torch.autograd.grad(loss_data_u, target_params, retain_graph=True, allow_unused=True)
+            shared_params = list(u_net.parameters())
             
-            max_pde = 0.0
-            for g in grad_pde:
-                if g is not None:
-                    max_pde = max(max_pde, torch.max(torch.abs(g)).item())
-                    
-            mean_data = 0.0
-            count = 0
-            for g in grad_data:
-                if g is not None:
-                    mean_data += torch.mean(torch.abs(g)).item()
-                    count += 1
-            mean_data = (mean_data / count) if count > 0 else 1.0
+            grads_data = torch.autograd.grad(loss_data_u, shared_params, retain_graph=True, allow_unused=True)
+            gn_data = torch.sqrt(sum(g.pow(2).sum() for g in grads_data if g is not None) + 1e-8)
             
-            # Factor lambda para escalar la pérdida de datos
-            lambda_data_u = max_pde / (mean_data + 1e-8)
-            dyn_weights["data_u"] = grad_ema_alpha * dyn_weights["data_u"] + (1 - grad_ema_alpha) * lambda_data_u
+            grads_pde = torch.autograd.grad(loss_pde, shared_params, retain_graph=True, allow_unused=True)
+            gn_pde = torch.sqrt(sum(g.pow(2).sum() for g in grads_pde if g is not None) + 1e-8)
+            
+            # Evitar que la PDE domine sobre los datos (escalamos PDE hacia Data)
+            lambda_pde = gn_data.detach() / (gn_pde.detach() + 1e-8)
+            
+            # Actualización EMA del peso de la PDE
+            dyn_weights["pde"] = grad_ema_alpha * dyn_weights["pde"] + (1 - grad_ema_alpha) * lambda_pde.item()
 
         loss_total = (dyn_weights["data_u"] * base_weights["data_u"] * loss_data_u + 
                       dyn_weights["data_sigma"] * base_weights["data_sigma"] * loss_data_sigma +

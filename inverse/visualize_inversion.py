@@ -10,7 +10,7 @@ def main():
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
     # 1. Cargar la red pre-entrenada
-    sigma_net = ConductivityNet().to(device)
+    sigma_net = ConductivityNet(hidden_layers=4, hidden_dim=128).to(device)
     model_path = 'sigma_net.pth'
     if not os.path.exists(model_path):
         print(f"Error: {model_path} no encontrado. Asegúrate de haber completado el entrenamiento.")

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from typing import Optional, List
-from .conductivity_net import MultiScaleFourierEncoding, ResidualMLP
+from .conductivity_net import PositionalEncoding, ResidualMLP
 
 class PotentialNet(nn.Module):
     """
@@ -11,8 +11,7 @@ class PotentialNet(nn.Module):
     """
     def __init__(
         self, 
-        fourier_features: int = 256, 
-        fourier_scales: Optional[List[float]] = None, 
+        num_frequencies: int = 10,
         hidden_layers: int = 5, 
         hidden_dim: int = 256, 
         domain_scale: float = 50.0,
@@ -20,18 +19,13 @@ class PotentialNet(nn.Module):
         normalization: Optional[str] = 'WeightNorm'
     ):
         super().__init__()
-        
-        if fourier_scales is None:
-            # Escalas multiresolución por defecto
-            fourier_scales = [1.0, 5.0, 10.0, 20.0, 40.0]
             
         self.source_scale = source_scale
         
-        # Mapeo multiescala de (x,y,z) reutilizado de ConductivityNet
-        self.fourier_map = MultiScaleFourierEncoding(
+        # Mapeo NeRF de (x,y,z) reutilizado de ConductivityNet
+        self.fourier_map = PositionalEncoding(
             in_features=3, 
-            mapping_size=fourier_features, 
-            scales=fourier_scales,
+            num_frequencies=num_frequencies,
             domain_scale=domain_scale
         )
         
