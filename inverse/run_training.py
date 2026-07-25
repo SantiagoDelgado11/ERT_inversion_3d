@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--w_data", type=float, default=1.0, help="Peso para el data loss")
     parser.add_argument("--w_pde", type=float, default=1e-4, help="Peso para el PDE loss")
     parser.add_argument("--w_bc", type=float, default=10.0, help="Peso para condiciones de frontera")
-    parser.add_argument("--w_reg", type=float, default=1e-4, help="Peso de regularizacion TV")
+    parser.add_argument("--w_reg", type=float, default=1e-3, help="Peso de regularizacion TV")
     parser.add_argument("--w_flux", type=float, default=1e-2, help="Peso para conservacion de flujo")
     parser.add_argument("--use_wandb", action="store_true", help="Activar logging en Weights & Biases")
     parser.add_argument("--wandb_project", type=str, default="ERT_PINN_3D")

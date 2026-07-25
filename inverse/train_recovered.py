@@ -186,8 +186,8 @@ def train_pinn(
     w_reg = weights.get('w_reg', 1e-4)
     dynamic_weights = [w_data, w_pde, w_bc, w_reg, w_flux]
 
-    # Valor de fondo en espacio logarítmico: m₀ = ln(σ₀) = ln(0.01) ≈ -4.605
-    m0 = math.log(0.01)
+    # Valor de fondo en espacio logarítmico: m₀ = ln(σ₀) = ln(0.0002857) ≈ -8.16
+    m0 = math.log(0.0002857)
 
     loss_dict = {}
 

@@ -1,16 +1,16 @@
 geology:
   background:
-    conductivity: 0.01
+    conductivity: 0.01  # 100 Ohm-m
 
   sphere:
     radius:
-      min: 2.0
-      max: 15.0
+      min: 10.0
+      max: 10.0
     conductivity:
-      min: 0.005
-      max: 0.2
+      min: 1.0  # 1 Ohm-m
+      max: 1.0  # 1 Ohm-m
     center:
-      margin_x: 10.0
+      margin_x: 40.0
       margin_y: 10.0
-      min_depth: 3.0
-      max_depth: 40.0
+      min_depth: 15.0
+      max_depth: 35.0
