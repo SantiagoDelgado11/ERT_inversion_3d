@@ -175,12 +175,16 @@ def train_pinn(
                     u_pri_n = informer.compute_u_pri(r_n, source_data, current_I)
                     u_tot_n = u_sec_n + u_pri_n
                     pred_u = u_tot_m - u_tot_n
+                    pred_sec = u_sec_m - u_sec_n
+                    target_sec = target - (u_pri_m - u_pri_n)
                 else:
                     pred_u = u_tot_m
+                    pred_sec = u_sec_m
+                    target_sec = target - u_pri_m
                     
-                # L2 Loss normalizado por la varianza del batch para evitar explosiones en cero
-                var_target = torch.var(target) + 1e-6
-                loss_data = torch.mean((pred_u - target) ** 2) / var_target
+                # Aislamos la huella de la anomalía (Potencial Secundario)
+                var_target_sec = torch.var(target_sec) + 1e-8
+                loss_data = torch.mean((pred_sec - target_sec) ** 2) / var_target_sec
 
                 # Física con Warm-up Lineal Seguro
                 loss_pde = informer.compute_pde_loss(r_pde, source_pde, current_I, gamma, latent=latent_pde)
@@ -193,7 +197,7 @@ def train_pinn(
                 
                 # Pesos estáticos: Sin Wang et al. para evitar explosiones
                 w_pde = weights.get("w_pde", 1.0) * warmup
-                w_reg = weights.get("w_reg", 1e-4) * warmup
+                w_reg = weights.get("w_reg", 0.01) * warmup
                 w_bc = weights.get("w_bc", 1.0) * warmup
                 w_flux = weights.get("w_flux", 1.0) * warmup
                 

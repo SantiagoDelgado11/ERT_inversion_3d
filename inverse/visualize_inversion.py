@@ -34,8 +34,8 @@ def main():
     _delta_v_scaled = torch.sign(_delta_v) * torch.log1p(torch.abs(_delta_v))
     encoder_input = torch.cat([_r_A, _r_B, _r_m, _r_n, _delta_v_scaled], dim=-1).unsqueeze(0)
     
-    encoder = MeasurementEncoder(in_features=13, hidden_dim=64, latent_dim=128).to(device)
-    sigma_net = ConductivityNet(hidden_layers=3, hidden_dim=64, latent_dim=128).to(device)
+    encoder = MeasurementEncoder(in_features=13, hidden_dim=128, latent_dim=128).to(device)
+    sigma_net = ConductivityNet(hidden_layers=5, hidden_dim=256, latent_dim=128).to(device)
 
     if args.use_checkpoint:
         checkpoint_path = 'checkpoint.pth'

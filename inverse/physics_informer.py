@@ -129,17 +129,19 @@ class PhysicsInformer:
         if return_residuals:
             return residual
             
-        # Multiplicamos por 1e3 para mantener el gradiente vivo sin que explote
-        scaled_residual = residual * 1e3
-        
+        # Escalar el residuo para balancear gradientes (evita que la física sea ignorada)
+        scaled_residual = residual * 1e6
         return torch.nn.functional.mse_loss(scaled_residual, torch.zeros_like(scaled_residual))
 
     def compute_bc_loss(self, surface_coords, inf_coords, source_coords_surf, source_coords_inf, latent_surf=None, latent_inf=None):
         loss = None
         if surface_coords is not None and surface_coords.shape[0] > 0:
             derivs_surf = self.compute_derivatives(surface_coords, source_coords_surf, latent=latent_surf)
-            flux_z = derivs_surf["sigma"] * derivs_surf["du_dz"]
-            loss_neumann = torch.mean(flux_z ** 2)
+            # El BC físico de Neumann implica J_z = -sigma * du_tot/dz = 0.
+            # Como sigma > 0 y u_pri ya cumple la condición, requerimos du_sec/dz = 0.
+            # NO multiplicamos por sigma para evitar que la red aprenda la trampa sigma=0.
+            du_dz_scaled = derivs_surf["du_dz"] * 1e4
+            loss_neumann = torch.mean(du_dz_scaled ** 2)
             loss = loss_neumann if loss is None else loss + loss_neumann
 
         if inf_coords is not None and inf_coords.shape[0] > 0:
