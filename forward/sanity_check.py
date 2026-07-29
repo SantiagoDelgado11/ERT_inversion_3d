@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 from dataset.generator import generate_single_sample
 from mesh.mesh_generator import generate_mesh
@@ -94,8 +95,11 @@ def main():
     # discretize PlotSlice is useful, but we can do a simple scatter
     y_center = mesh.nodes_y[mesh.shape_cells[1] // 2]
     # To keep dependencies light, we will use discretize's plot_slice
-    mesh.plot_slice(1.0/sigma, normal='Y', ax=axs[0], grid=True, pcolor_opts={'cmap': 'jet'})
+    mesh.plot_slice(1.0/sigma, normal='Y', ax=axs[0], grid=True, pcolor_opts={'cmap': 'jet', 'norm': mcolors.LogNorm(vmin=1, vmax=10000)})
     axs[0].set_title('True Resistivity (Ohm-m) - Y Slice')
+    axs[0].set_xlim(-30, 30)
+    axs[0].set_ylim(-60, 0)
+    axs[0].set_aspect('equal')
     
     # Pseudosection (scatter of apparent resistivities)
     x_coords = []
@@ -104,7 +108,7 @@ def main():
     
     with open("configs/survey.yaml", 'r') as f:
         survey_config = yaml.safe_load(f)['survey']
-    dx = survey_config.get('electrode_spacing', 2.0)
+    dx = survey_config.get('electrode_spacing_x', 2.0)
     
     for m in measurements:
         A_idx = m['A']
@@ -131,7 +135,7 @@ def main():
         n_levels.append(Z_pseudo)
         rho_as.append(m['rho_a'])
         
-    sc = axs[1].scatter(x_coords, n_levels, c=rho_as, cmap='jet')
+    sc = axs[1].scatter(x_coords, n_levels, c=rho_as, cmap='jet', norm=mcolors.LogNorm(vmin=1, vmax=10000))
     plt.colorbar(sc, ax=axs[1], label='Apparent Resistivity (Ohm-m)')
     axs[1].set_title('Pseudosection QC')
     axs[1].set_xlabel('X Position (m)')

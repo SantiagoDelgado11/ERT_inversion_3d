@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Optional, List
+from typing import Optional
 from .conductivity_net import PositionalEncoding, ResidualMLP
 
 class PotentialNet(nn.Module):
@@ -11,9 +11,10 @@ class PotentialNet(nn.Module):
     """
     def __init__(
         self, 
-        num_frequencies: int = 10,
+        num_frequencies: int = 0,
         hidden_layers: int = 5, 
         hidden_dim: int = 256, 
+        latent_dim: int = 256,
         domain_scale: float = 50.0,
         source_scale: float = 50.0,
         normalization: Optional[str] = 'WeightNorm'
@@ -21,6 +22,8 @@ class PotentialNet(nn.Module):
         super().__init__()
             
         self.source_scale = source_scale
+        
+        self.latent_dim = latent_dim
         
         # Mapeo NeRF de (x,y,z) reutilizado de ConductivityNet
         self.fourier_map = PositionalEncoding(
@@ -38,8 +41,9 @@ class PotentialNet(nn.Module):
         # - ||r_B||: 1
         # - 1 / (||r_A|| + eps): 1
         # - 1 / (||r_B|| + eps): 1
+        # - latent_dim: dimensión del vector de condiciones
         # Total extra = 6 + 3 + 3 + 1 + 1 + 1 + 1 = 16
-        in_dim = self.fourier_map.out_features + 16
+        in_dim = self.fourier_map.out_features + 16 + latent_dim
         
         self.mlp = ResidualMLP(
             in_dim=in_dim,
@@ -50,13 +54,14 @@ class PotentialNet(nn.Module):
             normalization=normalization
         )
 
-    def forward(self, coords: torch.Tensor, source_coords: torch.Tensor) -> torch.Tensor:
+    def forward(self, coords: torch.Tensor, source_coords: torch.Tensor, latent: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        coords: (batch_size, 3) coordenadas de evaluación (x, y, z)
-        source_coords: (batch_size, 6) posiciones de dipolo inyector (xA, yA, zA, xB, yB, zB)
+        coords: (N_points, 3) o (Batch, N_points, 3) coordenadas de evaluación (x, y, z)
+        source_coords: (N_points, 6) o (Batch, N_points, 6) posiciones de dipolo inyector
+        latent: Tensor de características latentes (N_points, latent_dim) o (Batch, N_points, latent_dim)
         
         Retorna:
-        u: (batch_size, 1) Potencial eléctrico estimado
+        u: (N_points, 1) Potencial eléctrico estimado
         """
         # 1. Características espaciales multiescala
         ff = self.fourier_map(coords)
@@ -81,8 +86,8 @@ class PotentialNet(nn.Module):
         
         source_norm = source_coords / self.source_scale
         
-        # 3. Concatenamos todas las representaciones (enriqueciendo el espacio de entrada)
-        x = torch.cat([
+        # 3. Concatenamos todas las representaciones
+        features = [
             ff, 
             source_norm, 
             r_A, 
@@ -91,7 +96,14 @@ class PotentialNet(nn.Module):
             d_B, 
             inv_d_A, 
             inv_d_B
-        ], dim=-1)
+        ]
+        
+        if latent is not None:
+            features.append(latent)
+        elif self.latent_dim > 0:
+            raise ValueError("latent must be provided when latent_dim > 0")
+            
+        x = torch.cat(features, dim=-1)
         
         # 4. Paso por la MLP residual
         u = self.mlp(x)

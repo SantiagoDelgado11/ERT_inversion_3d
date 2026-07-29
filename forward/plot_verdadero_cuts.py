@@ -47,7 +47,10 @@ def main():
     print("Generando graficos comparativos...")
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
     
-    z_val, y_val, x_val = -25.0, 0.0, 0.0
+    # Utilizar las coordenadas exactas de la anomalía generada
+    anomaly = anomalies[0]
+    x_val, y_val, z_val = anomaly.cx, anomaly.cy, anomaly.cz
+    print(f"La anomalia esta centrada en X={x_val:.1f}, Y={y_val:.1f}, Z={z_val:.1f}")
     z_idx = np.argmin(np.abs(full_z - z_val))
     y_idx = np.argmin(np.abs(full_y - y_val))
     x_idx = np.argmin(np.abs(full_x - x_val))

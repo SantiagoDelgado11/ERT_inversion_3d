@@ -6,7 +6,7 @@ class FourierFeatureMapping(nn.Module):
     Mapeo de Características de Fourier para superar el sesgo espectral (Spectral Bias)
     y permitir el aprendizaje de altas frecuencias (bordes afilados de anomalías).
     """
-    def __init__(self, in_features, mapping_size, scale=1.0, domain_scale=50.0):
+    def __init__(self, in_features, mapping_size, scale=10.0, domain_scale=50.0):
         super().__init__()
         self.in_features = in_features
         self.mapping_size = mapping_size

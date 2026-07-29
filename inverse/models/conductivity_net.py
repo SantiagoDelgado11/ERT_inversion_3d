@@ -76,7 +76,9 @@ class ResidualBlock(nn.Module):
             self.norm2 = nn.LayerNorm(hidden_dim)
             
             nn.init.kaiming_normal_(self.linear1.weight, nonlinearity='relu')
-            nn.init.zeros_(self.linear2.weight)
+            nn.init.kaiming_normal_(self.linear2.weight, nonlinearity='relu')
+            with torch.no_grad():
+                self.linear2.weight.mul_(1e-3)
             if self.linear2.bias is not None:
                 nn.init.zeros_(self.linear2.bias)
                 
@@ -87,7 +89,9 @@ class ResidualBlock(nn.Module):
             self.norm2 = nn.Identity()
             
             nn.init.kaiming_normal_(self.linear1.weight, nonlinearity='relu')
-            nn.init.zeros_(self.linear2.weight)
+            nn.init.kaiming_normal_(self.linear2.weight, nonlinearity='relu')
+            with torch.no_grad():
+                self.linear2.weight.mul_(1e-3)
             if self.linear2.bias is not None:
                 nn.init.zeros_(self.linear2.bias)
         else:
@@ -98,12 +102,14 @@ class ResidualBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
         
-        out = self.linear1(x)
-        out = self.norm1(out)
+        # Pre-LN para evitar que LayerNorm anule la inicialización a cero de linear2
+        # Si norm1/norm2 son Identity (WeightNorm/None), esto equivale al orden estándar
+        out = self.norm1(x)
+        out = self.linear1(out)
         out = self.activation(out)
         
-        out = self.linear2(out)
         out = self.norm2(out)
+        out = self.linear2(out)
         
         return residual + self.alpha * out
 
@@ -112,7 +118,7 @@ class ResidualMLP(nn.Module):
     """
     Perceptrón Multicapa con conexiones residuales.
     """
-    def __init__(self, in_dim: int, hidden_layers: int, hidden_dim: int, out_dim: int, activation=nn.SiLU, normalization: Optional[str] = 'WeightNorm'):
+    def __init__(self, in_dim: int, hidden_layers: int, hidden_dim: int, out_dim: int, activation=nn.SiLU, normalization: Optional[str] = 'WeightNorm', final_bias: float = 0.0):
         super().__init__()
         
         input_layer = nn.Linear(in_dim, hidden_dim)
@@ -130,11 +136,9 @@ class ResidualMLP(nn.Module):
         
         self.output_layer = nn.Linear(hidden_dim, out_dim)
         
-        # Inicializamos la última capa para que sus salidas sean muy cercanas a 0.
-        # Esto es crucial para la parametrización logarítmica, permitiendo que
-        # al inicio delta ≈ 0 y sigma ≈ sigma_background.
-        nn.init.uniform_(self.output_layer.weight, -1e-4, 1e-4)
-        nn.init.zeros_(self.output_layer.bias)
+        # Inicializamos la última capa para que sus salidas sean muy cercanas a final_bias.
+        nn.init.uniform_(self.output_layer.weight, -1e-1, 1e-1)
+        nn.init.constant_(self.output_layer.bias, final_bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_layer(x)
@@ -152,39 +156,59 @@ class ConductivityNet(nn.Module):
         num_frequencies: int = 10,
         hidden_layers: int = 6,  # Capacidad aumentada por defecto para 3D
         hidden_dim: int = 256,   # Capacidad aumentada por defecto para 3D
+        latent_dim: int = 256,   # Dimensión del vector latente del MeasurementEncoder
         sigma_min: float = 1e-4,
         sigma_max: float = 1.0,
-        domain_scale: float = 50.0
+        domain_scale: float = 50.0,
+        sigma_rff: float = 4.0,
+        normalization: Optional[str] = 'WeightNorm'
     ):
         super().__init__()
             
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         
+        self.latent_dim = latent_dim
+        
         # Mapeo de (x,y,z) con Positional Encoding NeRF
         self.fourier_map = PositionalEncoding(
             in_features=3, 
             num_frequencies=num_frequencies, 
-            domain_scale=domain_scale
+            domain_scale=domain_scale,
+            sigma_rff=sigma_rff
         )
         
         # Red Residual
         self.mlp = ResidualMLP(
-            in_dim=self.fourier_map.out_features, 
+            in_dim=self.fourier_map.out_features + latent_dim, 
             hidden_layers=hidden_layers, 
             hidden_dim=hidden_dim, 
             out_dim=1, 
-            activation=nn.SiLU
+            activation=nn.SiLU,
+            final_bias=-4.595,
+            normalization=normalization
         )
 
-    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+    def forward(self, coords: torch.Tensor, latent: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        coords: Tensor de coordenadas (batch_size, 3)
+        coords: Tensor de coordenadas (N_points, 3) o (Batch, N_points, 3)
+        latent: Tensor de características latentes (N_points, latent_dim) o (Batch, N_points, latent_dim)
         """
         ff = self.fourier_map(coords)
-        raw_output = self.mlp(ff)
         
-        # Mapeo Sigmoide estricto para evitar explosiones de resistividad
+        if latent is not None:
+            x = torch.cat([ff, latent], dim=-1)
+        elif self.latent_dim == 0:
+            x = ff
+        else:
+            # Fallback en caso de que no se provea latente (ej. para compatibilidad con código antiguo)
+            # En práctica, si latent_dim > 0, esto fallará en self.mlp. Es mejor requerirlo.
+            raise ValueError("latent must be provided when latent_dim > 0")
+
+        raw_output = self.mlp(x)
+        
+        # Mapeo suave que garantiza que sigma siempre esté entre sigma_min y sigma_max
+        # conservando un gradiente continuo (sin zonas muertas)
         sigma = self.sigma_min + (self.sigma_max - self.sigma_min) * torch.sigmoid(raw_output)
         
         return sigma
