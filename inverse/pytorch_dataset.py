@@ -40,7 +40,7 @@ class ERTDataset(Dataset):
             self.z_max,
         ) = self._load_domain_bounds()
 
-        with h5py.File(self.h5_filepath, "r", swmr=True) as f:
+        with h5py.File(self.h5_filepath, "r") as f:
             self.n_samples = f["inputs/apparent_resistivity"].shape[0]
 
     def __len__(self):
@@ -167,7 +167,7 @@ class ERTDataset(Dataset):
         return center_A + radius * normals, normals, center_B + radius * normals, normals, area
 
     def __getitem__(self, idx):
-        with h5py.File(self.h5_filepath, "r", swmr=True) as f:
+        with h5py.File(self.h5_filepath, "r") as f:
             rho_a_np = f["inputs/apparent_resistivity"][idx]
             elec_pos_np = f["inputs/electrode_positions"][idx]
             if "inputs/delta_v" in f:
