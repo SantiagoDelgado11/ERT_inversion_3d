@@ -1,0 +1,23 @@
+domain:
+  x_length: 100.0
+  y_length: 100.0
+  z_length: 50.0
+  bg_resistivity: 100.0
+anomaly:
+  x: 50.0
+  y: 50.0
+  z: 25.0
+  r: 10.0
+  resistivity: 30.0
+survey:
+  n_electrodes_x: 7
+  n_electrodes_y: 7
+  spacing: 15.0
+  a_skip: 1
+  max_n: 5
+  max_a_spacing: 3
+mesh:
+  core_cell_size: 8.0
+  padding_cells: 5
+  padding_factor: 1.5
+output_dir: "dataset_output_test"

@@ -333,6 +333,23 @@ def train_pinn(
                 "lr_m": current_lr_m,
                 **loss_dict
             })
+            
+        # Guardado del checkpoint (sobrescribe un solo archivo)
+        if (epoch + 1) % 10 == 0:
+            import os
+            os.makedirs("checkpoints", exist_ok=True)
+            checkpoint_path = "checkpoints/latest_checkpoint.pth"
+            torch.save({
+                'epoch': epoch,
+                'u_net_state_dict': u_net.state_dict(),
+                'm_net_state_dict': m_net.state_dict(),
+                'optimizer_u_state_dict': optimizer_u.state_dict(),
+                'optimizer_m_state_dict': optimizer_m.state_dict(),
+                'scheduler_u_state_dict': scheduler_u.state_dict(),
+                'scheduler_m_state_dict': scheduler_m.state_dict(),
+                'loss_total': loss_dict.get('loss_total', 0),
+            }, checkpoint_path)
+
         pbar_adam.set_postfix(loss=f"{loss_dict.get('loss_total', 0):.4e}")
 
     return u_net, m_net

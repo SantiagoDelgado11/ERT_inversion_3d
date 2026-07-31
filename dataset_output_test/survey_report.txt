@@ -1,0 +1,15 @@
+=== 3D ERT Acquisition Report ===
+Total Electrodes: 49
+Total Valid Measurements: 824
+Unique Current Injectors (A): 49 (100.0%)
+
+--- Spatial Coverage ---
+Pseudo-depth Range: 7.5 m to 53.0 m
+Average Pseudo-depth: 18.9 m
+Measurements targeting shallow (< 9.5m): 140
+Measurements targeting deep (> 28.4m): 176
+
+--- Configuration Constraints Used ---
+A Skip Factor: 1
+Max N-factor: 5
+Max A-spacing: 3

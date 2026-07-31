@@ -52,7 +52,7 @@ def train_pinn(
 
     base_weights = {
         "data_u": weights.get("w_data", 1.0),
-        "data_sigma": weights.get("w_data", 1.0),
+        "data_sigma": weights.get("w_data_sigma", 0.25),
         "pde": weights.get("w_pde", 1.0),
         "bc": weights.get("w_bc", 1.0),
         "flux": weights.get("w_flux", 1.0),
@@ -99,6 +99,8 @@ def train_pinn(
         r_m = t["r_m"]
         r_n = t["r_n"]
         data_target = t["data_target"]
+        r_sigma = t["r_sigma"]
+        log_sigma_target = t["log_sigma_target"]
         source_data = t["source_data"]
         r_pde = t["r_pde"]
         source_coords_pde = t["source_coords_pde"]
@@ -139,13 +141,18 @@ def train_pinn(
             # requires ~12-14 GB of VRAM. We apply Stochastic Gradient Descent over
             # the measurements (mini-batching) to dramatically reduce VRAM.
             num_meas = source_data.shape[0]
-            max_meas = 64
+            # Keep a substantial, deterministic fraction of the real survey
+            # in every step.  A 64-point random sample was too noisy for this
+            # single-survey inverse problem and hid the measurement signal.
+            max_meas = min(512, num_meas)
             if num_meas > max_meas:
                 idx_meas = torch.randperm(num_meas, device=device)[:max_meas]
                 sub_source = source_data[idx_meas]
                 sub_r_m = r_m[idx_meas] if r_m is not None else None
                 sub_r_n = r_n[idx_meas] if r_n is not None else None
                 sub_target = data_target[idx_meas] if data_target is not None else None
+                sub_r_sigma = r_sigma[idx_meas]
+                sub_log_sigma_target = log_sigma_target[idx_meas]
                 # Evaluamos el RMSE global sin gradientes para el logueo
                 with torch.no_grad():
                     u_pri_m_full = informer.compute_u_pri(r_m, source_data, current_I)
@@ -161,6 +168,8 @@ def train_pinn(
                 sub_r_m = r_m
                 sub_r_n = r_n
                 sub_target = data_target
+                sub_r_sigma = r_sigma
+                sub_log_sigma_target = log_sigma_target
                 pred_u_full = None
 
             # 1. Pérdida estándar (ajusta u_net, que ahora predice u_sec)
@@ -178,11 +187,12 @@ def train_pinn(
 
             loss_data_u = torch.mean((pred_u - sub_target) ** 2)
 
-            # 2. Pérdida de reciprocidad (ajusta sigma_net)
-            # Desactivada temporalmente: La integral de Monte Carlo sobre todo el volumen 
-            # tiene varianza infinita cerca de las singularidades de los electrodos, 
-            # causando colapso en sigma_net.
-            loss_data_sigma = torch.tensor(0.0, device=device, requires_grad=True)
+            # 2. Guía débil de conductividad a partir de las mediciones.
+            # Rho_a es una respuesta integrada, no una propiedad local.  Se
+            # usa solo en pseudo-profundidades y en logaritmos para evitar que
+            # esta aproximación destruya la solución física de la PDE.
+            predicted_log_sigma = torch.log(torch.clamp(sigma_net(sub_r_sigma), min=1e-6))
+            loss_data_sigma = torch.mean((predicted_log_sigma - sub_log_sigma_target) ** 2)
 
             # Devolvemos las predicciones completas para el logging (RMSE) si aplicó subsampling
             final_pred = pred_u_full if pred_u_full is not None else pred_u
@@ -325,6 +335,8 @@ def train_pinn(
                 "r_m": prepare(data_samples["r_m"]),
                 "r_n": prepare(data_samples["r_n"]) if "r_n" in data_samples else None,
                 "data_target": prepare(data_samples.get("delta_v", data_samples["u_star"])),
+                "r_sigma": prepare(data_samples["r_sigma"]),
+                "log_sigma_target": prepare(data_samples["log_sigma_target"]),
                 "source_data": prepare(data_samples["source"]) if "source" in data_samples else None,
                 "r_pde": r_pde,
                 "source_coords_pde": source_coords_pde,
@@ -479,6 +491,23 @@ def train_pinn(
                 
             wandb.log(log_payload)
             
+        # Guardado del checkpoint
+        if (epoch + 1) % 10 == 0:
+            import os
+            import shutil
+            os.makedirs("checkpoints", exist_ok=True)
+            checkpoint_path = "checkpoints/latest_checkpoint.pth"
+            temp_path = "checkpoints/latest_checkpoint_tmp.pth"
+            torch.save({
+                'epoch': epoch,
+                'u_net_state_dict': u_net.state_dict(),
+                'sigma_net_state_dict': sigma_net.state_dict(),
+                'optimizer_joint_state_dict': optimizer_joint.state_dict(),
+                'scheduler_joint_state_dict': scheduler_joint.state_dict(),
+                'loss_total': epoch_losses['total'],
+            }, temp_path)
+            shutil.move(temp_path, checkpoint_path)
+
         pbar_adam.set_postfix(loss=f"{epoch_losses['total']:.4e}", lr=f"{current_lr:.2e}")
 
     return u_net, sigma_net

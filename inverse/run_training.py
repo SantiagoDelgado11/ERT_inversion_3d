@@ -19,6 +19,7 @@ except ImportError:
 def main():
     parser = argparse.ArgumentParser(description="Entrenamiento PINN para ERT 3D")
     parser.add_argument("--w_data", type=float, default=1.0, help="Peso para el data loss")
+    parser.add_argument("--w_data_sigma", type=float, default=0.25, help="Peso de la guia pseudo-profunda de conductividad")
     parser.add_argument("--w_pde", type=float, default=1e-4, help="Peso para el PDE loss")
     parser.add_argument("--w_bc", type=float, default=10.0, help="Peso para condiciones de frontera")
     parser.add_argument("--w_reg", type=float, default=1e-4, help="Peso de regularizacion TV")
@@ -39,6 +40,7 @@ def main():
             name=args.wandb_name,
             config={
                 "w_data": args.w_data,
+                "w_data_sigma": args.w_data_sigma,
                 "w_pde": args.w_pde,
                 "w_bc": args.w_bc,
                 "w_reg": args.w_reg,
@@ -50,12 +52,13 @@ def main():
     print(f"Iniciando entrenamiento en: {device}")
 
     repo_root = Path(__file__).resolve().parents[1]
-    h5_filepath = repo_root / "forward" / "ert3d_dataset_final.h5"
+    csv_filepath = repo_root / "dataset_output" / "measurements.csv"
     current_I = 1.0
     gamma = 4.0
 
     weights = {
         "w_data": args.w_data,
+        "w_data_sigma": args.w_data_sigma,
         "w_pde": args.w_pde,
         "w_bc": args.w_bc,
         "w_reg": args.w_reg,
@@ -64,7 +67,7 @@ def main():
 
     print("Cargando dataset y generando puntos de colocacion fisicos...")
     dataset = ERTDataset(
-        h5_filepath=h5_filepath,
+        csv_filepath=csv_filepath,
         n_pde=500,
         n_bc_surf=100,
         n_bc_inf=100,

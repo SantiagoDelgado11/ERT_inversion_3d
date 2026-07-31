@@ -130,11 +130,12 @@ class ResidualMLP(nn.Module):
         
         self.output_layer = nn.Linear(hidden_dim, out_dim)
         
-        # Inicializamos la última capa para que sus salidas sean muy cercanas a 0.
-        # Esto es crucial para la parametrización logarítmica, permitiendo que
-        # al inicio delta ≈ 0 y sigma ≈ sigma_background.
-        nn.init.uniform_(self.output_layer.weight, -1e-4, 1e-4)
-        nn.init.zeros_(self.output_layer.bias)
+        # Inicializamos la última capa con Kaiming Normal (estándar) para evitar 
+        # el desvanecimiento de gradientes (vanishing gradients) provocado por pesos diminutos.
+        # Inicializamos el bias en -4.605 para que la salida inicial tras el sigmoide sea exactamente 0.01 S/m.
+        # sigmoid(-4.605) ≈ 0.01. Esto evita la necesidad de un "warm-up" artificial.
+        nn.init.kaiming_normal_(self.output_layer.weight, nonlinearity='linear')
+        nn.init.constant_(self.output_layer.bias, -4.605)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_layer(x)

@@ -76,7 +76,7 @@ class PhysicsInformer:
             "ds_dz": ds_dz,
         }
 
-    def compute_grad_u_pri(self, coords, r_A, r_B, I, sigma_0=1e-3):
+    def compute_grad_u_pri(self, coords, r_A, r_B, I, sigma_0=0.01):
         eps = 1e-6
         r_dist_A = coords - r_A
         d_A = torch.sqrt(torch.sum(r_dist_A**2, dim=-1, keepdim=True) + eps)
@@ -85,10 +85,15 @@ class PhysicsInformer:
         r_dist_B = coords - r_B
         d_B = torch.sqrt(torch.sum(r_dist_B**2, dim=-1, keepdim=True) + eps)
         grad_B = -r_dist_B / (d_B**3 + eps)
+
+        # Pole sources are encoded by B == A by ERTDataset.  Their primary
+        # field is a monopole, not a dipole whose two terms cancel.
+        is_pole = (torch.linalg.norm(r_A - r_B, dim=-1, keepdim=True) < 1e-5).to(grad_A.dtype)
+        grad_B = grad_B * (1.0 - is_pole)
         
         return (I / (2 * torch.pi * sigma_0)) * (grad_A - grad_B)
 
-    def compute_u_pri(self, coords, source_coords, I, sigma_0=1e-3):
+    def compute_u_pri(self, coords, source_coords, I, sigma_0=0.01):
         if source_coords is None:
             return torch.zeros(coords.shape[0], 1, device=coords.device)
         r_A = source_coords[:, 0:3]
@@ -96,9 +101,11 @@ class PhysicsInformer:
         eps = 1e-6
         d_A = torch.sqrt(torch.sum((coords - r_A)**2, dim=-1, keepdim=True) + eps)
         d_B = torch.sqrt(torch.sum((coords - r_B)**2, dim=-1, keepdim=True) + eps)
-        return (I / (2 * torch.pi * sigma_0)) * (1.0 / d_A - 1.0 / d_B)
+        is_pole = (torch.linalg.norm(r_A - r_B, dim=-1, keepdim=True) < 1e-5).to(d_A.dtype)
+        secondary = (1.0 - is_pole) / d_B
+        return (I / (2 * torch.pi * sigma_0)) * (1.0 / d_A - secondary)
 
-    def compute_pde_loss(self, coords, source_coords, I, gamma, sigma_0=1e-3):
+    def compute_pde_loss(self, coords, source_coords, I, gamma, sigma_0=0.01):
         derivs = self.compute_derivatives(coords, source_coords)
         div_flux_sec = derivs["div_flux"]
         
@@ -132,7 +139,7 @@ class PhysicsInformer:
             loss = torch.tensor(0.0, device=device)
         return loss
 
-    def compute_reg_loss(self, coords, rho_bg=1000.0):
+    def compute_reg_loss(self, coords, rho_bg=100.0):
         derivs = self.compute_derivatives(coords, source_coords=None)
         ds_dx, ds_dy, ds_dz = derivs["ds_dx"], derivs["ds_dy"], derivs["ds_dz"]
         sigma = derivs["sigma"]

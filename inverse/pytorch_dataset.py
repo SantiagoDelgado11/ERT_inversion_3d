@@ -17,14 +17,14 @@ class ERTDataset(Dataset):
 
     def __init__(
         self,
-        h5_filepath,
+        csv_filepath,
         n_pde=10000,
         n_bc_surf=2000,
         n_bc_inf=2000,
         n_flux=500,
         epsilon=0.5,
     ):
-        self.h5_filepath = h5_filepath
+        self.csv_filepath = csv_filepath
         self.n_pde = n_pde
         self.n_bc_surf = n_bc_surf
         self.n_bc_inf = n_bc_inf
@@ -38,10 +38,9 @@ class ERTDataset(Dataset):
             self.y_max,
             self.z_min,
             self.z_max,
-        ) = self._load_domain_bounds()
+        ) = (0.0, 100.0, 0.0, 100.0, 0.0, 50.0)
 
-        with h5py.File(self.h5_filepath, "r") as f:
-            self.n_samples = f["inputs/apparent_resistivity"].shape[0]
+        self.n_samples = 1
 
     def __len__(self):
         return self.n_samples
@@ -90,9 +89,9 @@ class ERTDataset(Dataset):
         # 70% puntos enfocados en el volumen central profundo (zona de interés)
         n_focal = num_points - n_global
         focal_bounds = (
-            (max(xmin, -25.0), min(xmax, 25.0)),
-            (max(ymin, -25.0), min(ymax, 25.0)),
-            (max(zmin, -30.0), min(zmax, -2.0)) # Z profundo
+            (max(xmin, 25.0), min(xmax, 75.0)),
+            (max(ymin, 25.0), min(ymax, 75.0)),
+            (max(zmin, 10.0), min(zmax, 40.0)) # Z profundo
         )
         focal_pts = self._sample_uniform(focal_bounds, n_focal)
         
@@ -167,25 +166,67 @@ class ERTDataset(Dataset):
         return center_A + radius * normals, normals, center_B + radius * normals, normals, area
 
     def __getitem__(self, idx):
-        with h5py.File(self.h5_filepath, "r") as f:
-            rho_a_np = f["inputs/apparent_resistivity"][idx]
-            elec_pos_np = f["inputs/electrode_positions"][idx]
-            if "inputs/delta_v" in f:
-                delta_v_np = f["inputs/delta_v"][idx]
-            else:
-                k_values = np.array(
-                    [
-                        self._calculate_geometric_factor(row[0], row[1], row[2], row[3])
-                        for row in elec_pos_np
-                    ],
-                    dtype=np.float32,
-                )
-                delta_v_np = rho_a_np / k_values
+        import pandas as pd
+        df = pd.read_csv(self.csv_filepath)
+
+        required = {
+            'A_x', 'A_y', 'A_z', 'B_x', 'B_y', 'B_z',
+            'M_x', 'M_y', 'M_z', 'N_x', 'N_y', 'N_z', 'V', 'Rho_a'
+        }
+        missing = sorted(required.difference(df.columns))
+        if missing:
+            raise ValueError(f"measurements.csv no contiene columnas requeridas: {missing}")
+
+        # B is intentionally empty in a pole-dipole survey.  Reusing A as a
+        # sentinel keeps all source coordinates finite; PhysicsInformer treats
+        # A==B as a pole (the second electrode is at infinity).
+        pole_mask = df[['B_x', 'B_y', 'B_z']].isna().all(axis=1).to_numpy()
+        partial_b = df[['B_x', 'B_y', 'B_z']].isna().any(axis=1).to_numpy() & ~pole_mask
+        if partial_b.any():
+            raise ValueError("Hay mediciones con coordenadas B parcialmente vacias")
+
+        a_np = df[['A_x', 'A_y', 'A_z']].to_numpy(dtype=np.float32)
+        b_np = df[['B_x', 'B_y', 'B_z']].to_numpy(dtype=np.float32)
+        b_np[pole_mask] = a_np[pole_mask]
+
+        rho_a_np = df['Rho_a'].to_numpy(dtype=np.float32)
+        delta_v_np = df['V'].to_numpy(dtype=np.float32)
+        if not np.isfinite(delta_v_np).all() or not np.isfinite(rho_a_np).all():
+            raise ValueError("measurements.csv contiene V o Rho_a no finitos")
+
+        # Apparent resistivity is an integrated response.  Use only its
+        # low-resistivity contrast as a weak anomaly indicator; fitting rho_a
+        # directly at every pseudo-point was collapsing the model to its
+        # survey median.  The contrast is normalized robustly and clipped so
+        # outliers cannot create unbounded conductivity.
+        rho_reference = float(np.median(rho_a_np))
+        rho_low = float(np.percentile(rho_a_np, 10.0))
+        contrast = np.clip(
+            (rho_reference - rho_a_np) / max(rho_reference - rho_low, 1e-6),
+            0.0,
+            1.0,
+        )
+
+        elec_pos_np = np.stack([
+            a_np,
+            b_np,
+            df[['M_x', 'M_y', 'M_z']].values,
+            df[['N_x', 'N_y', 'N_z']].values
+        ], axis=1)
 
         r_A_all = torch.tensor(elec_pos_np[:, 0, :], dtype=torch.float32)
         r_B_all = torch.tensor(elec_pos_np[:, 1, :], dtype=torch.float32)
         r_M_all = torch.tensor(elec_pos_np[:, 2, :], dtype=torch.float32)
         r_N_all = torch.tensor(elec_pos_np[:, 3, :], dtype=torch.float32)
+
+        # Pseudo-position used only as a weak data guide.  Apparent
+        # resistivity is not local resistivity, so this must not replace the
+        # PDE; it only tells the inversion where the survey sees a contrast.
+        midpoint_np = 0.5 * (elec_pos_np[:, 2, :] + elec_pos_np[:, 3, :])
+        pseudo_depth_np = 0.5 * np.linalg.norm(a_np - midpoint_np, axis=1)
+        pseudo_depth_np = np.clip(pseudo_depth_np, self.z_min + 1.0, self.z_max - 1.0)
+        r_sigma_data = midpoint_np.copy()
+        r_sigma_data[:, 2] = pseudo_depth_np
 
         source = torch.cat([r_A_all, r_B_all], dim=1)
         source_pool = torch.tensor(np.unique(source.numpy(), axis=0), dtype=torch.float32)
@@ -228,6 +269,15 @@ class ERTDataset(Dataset):
                 "delta_v": delta_v,
                 "u_star": delta_v,
                 "apparent_resistivity": rho_a,
+                "r_sigma": torch.tensor(r_sigma_data, dtype=torch.float32),
+                "log_sigma_target": (
+                    -torch.log(torch.tensor(rho_reference, dtype=torch.float32))
+                    + torch.tensor(contrast, dtype=torch.float32).unsqueeze(1)
+                    * (
+                        -torch.log(torch.tensor(rho_reference / 3.0, dtype=torch.float32))
+                        + torch.log(torch.tensor(rho_reference, dtype=torch.float32))
+                    )
+                ),
                 "source": source,
             },
             "pde": {
