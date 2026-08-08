@@ -38,7 +38,7 @@ class ERTDataset(Dataset):
             self.y_max,
             self.z_min,
             self.z_max,
-        ) = (0.0, 100.0, 0.0, 100.0, 0.0, 50.0)
+        ) = self._load_domain_bounds()
 
         self.n_samples = 1
 
@@ -47,7 +47,10 @@ class ERTDataset(Dataset):
 
     def _load_domain_bounds(self):
         """Use the forward core mesh as the inverse collocation domain."""
-        fallback = (-50.0, 50.0, -20.0, 20.0, -40.0, 0.0)
+        # The generated campaign uses x,y in [0, 100], z=0 at the surface,
+        # and negative z below the surface.  Keep this convention even when
+        # the optional forward mesh configuration is not present.
+        fallback = (0.0, 100.0, 0.0, 100.0, -50.0, 0.0)
         config_path = Path(__file__).resolve().parents[1] / "forward" / "configs" / "mesh.yaml"
         try:
             with open(config_path, "r") as f:
@@ -86,12 +89,18 @@ class ERTDataset(Dataset):
         n_global = int(0.3 * num_points)
         global_pts = self._sample_uniform(bounds, n_global)
         
-        # 70% puntos enfocados en el volumen central profundo (zona de interés)
+        # 70% of the points focus on the central/deep part of the actual domain.
         n_focal = num_points - n_global
+        x_center = 0.5 * (xmin + xmax)
+        y_center = 0.5 * (ymin + ymax)
+        z_center = 0.5 * (zmin + zmax)
+        x_half = 0.25 * (xmax - xmin)
+        y_half = 0.25 * (ymax - ymin)
+        z_half = 0.3 * (zmax - zmin)
         focal_bounds = (
-            (max(xmin, 25.0), min(xmax, 75.0)),
-            (max(ymin, 25.0), min(ymax, 75.0)),
-            (max(zmin, 10.0), min(zmax, 40.0)) # Z profundo
+            (max(xmin, x_center - x_half), min(xmax, x_center + x_half)),
+            (max(ymin, y_center - y_half), min(ymax, y_center + y_half)),
+            (max(zmin, z_center - z_half), min(zmax, z_center + z_half)),
         )
         focal_pts = self._sample_uniform(focal_bounds, n_focal)
         
@@ -224,9 +233,11 @@ class ERTDataset(Dataset):
         # PDE; it only tells the inversion where the survey sees a contrast.
         midpoint_np = 0.5 * (elec_pos_np[:, 2, :] + elec_pos_np[:, 3, :])
         pseudo_depth_np = 0.5 * np.linalg.norm(a_np - midpoint_np, axis=1)
-        pseudo_depth_np = np.clip(pseudo_depth_np, self.z_min + 1.0, self.z_max - 1.0)
+        max_depth = max(-self.z_min - 1.0, 1.0)
+        pseudo_depth_np = np.clip(pseudo_depth_np, 1.0, max_depth)
         r_sigma_data = midpoint_np.copy()
-        r_sigma_data[:, 2] = pseudo_depth_np
+        # Pseudo-depth is a positive distance; the PINN domain points down.
+        r_sigma_data[:, 2] = -pseudo_depth_np
 
         source = torch.cat([r_A_all, r_B_all], dim=1)
         source_pool = torch.tensor(np.unique(source.numpy(), axis=0), dtype=torch.float32)

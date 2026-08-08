@@ -291,7 +291,10 @@ def train_pinn(
     pbar_adam = tqdm(range(num_epochs_adam), desc="Adam")
 
     consecutive_degenerate_epochs = 0
-    dyn_weights = base_weights.copy()
+    # Dynamic factors are dimensionless.  The configured physical weights are
+    # applied separately in loss_total; initializing from base_weights would
+    # square every configured weight and effectively suppress the PDE.
+    dyn_weights = {k: 1.0 for k in base_weights}
 
     for epoch in pbar_adam:
         # Acumuladores de métricas de la época
