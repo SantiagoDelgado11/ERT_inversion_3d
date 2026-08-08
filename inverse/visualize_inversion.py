@@ -12,7 +12,7 @@ import h5py
 
 def main():
     parser = argparse.ArgumentParser(description="Visualizar Inversión ERT 3D")
-    parser.add_argument("--use_checkpoint", action="store_true", help="Usar el checkpoint más reciente en checkpoints/latest_checkpoint.pth")
+    parser.add_argument("--use_checkpoint", action="store_true", help="Usar checkpoints/final_checkpoint.pth")
     parser.add_argument("--weights", default="sigma_net.pth", help="Pesos de sigma_net")
     parser.add_argument("--h5", default="dataset_output_test/campaign.h5", help="Campaña para usar su malla y ground truth")
     parser.add_argument("--output", default="inversion_result.png", help="Imagen de salida")
@@ -24,7 +24,7 @@ def main():
     sigma_net = ConductivityNet(hidden_layers=4, hidden_dim=128).to(device)
     
     if args.use_checkpoint:
-        model_path = 'checkpoints/latest_checkpoint.pth'
+        model_path = 'checkpoints/final_checkpoint.pth'
         if not os.path.exists(model_path):
             print(f"Error: {model_path} no encontrado.")
             return

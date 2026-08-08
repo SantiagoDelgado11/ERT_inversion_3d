@@ -22,13 +22,18 @@ def main():
     parser.add_argument("--w_data_sigma", type=float, default=0.0, help="Peso opcional de la guia pseudo-profunda de conductividad")
     parser.add_argument("--w_pde", type=float, default=1.0, help="Peso para el residual PDE")
     parser.add_argument("--w_bc", type=float, default=1.0, help="Peso para condiciones de frontera")
-    parser.add_argument("--w_reg", type=float, default=1e-6, help="Peso de regularizacion TV sobre log(sigma)")
+    parser.add_argument("--w_reg", type=float, default=1e-2, help="Peso de regularizacion y anclaje del fondo sobre log(sigma)")
     parser.add_argument("--w_flux", type=float, default=1.0, help="Peso para conservacion de flujo")
     parser.add_argument("--use_wandb", action="store_true", help="Activar logging en Weights & Biases")
     parser.add_argument("--wandb_project", type=str, default="ERT_PINN_3D")
     parser.add_argument("--wandb_name", type=str, default="baseline_training_run")
     parser.add_argument("--csv", type=str, default="dataset_output/measurements.csv",
                         help="CSV de mediciones generado junto a campaign.h5")
+    parser.add_argument("--epochs_adam", type=int, default=1000)
+    parser.add_argument("--epochs_lbfgs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr_sigma", type=float, default=None)
+    parser.add_argument("--warmup_epochs", type=int, default=100)
     args = parser.parse_args()
 
     if args.use_wandb:
@@ -57,7 +62,6 @@ def main():
     csv_filepath = Path(args.csv)
     if not csv_filepath.is_absolute():
         csv_filepath = repo_root / csv_filepath
-    current_I = 1.0
     gamma = 4.0
 
     weights = {
@@ -78,6 +82,7 @@ def main():
         n_flux=50,
         epsilon=gamma,
     )
+    current_I = dataset.current_I
     
     # IMPORTANTE: Para una inversión PINN, solo debemos entrenar sobre UN conjunto 
     # de mediciones (un "survey" específico). Extraemos la primera muestra (idx=0).
@@ -85,8 +90,8 @@ def main():
     dataloader = DataLoader(subset, batch_size=1, shuffle=True)
 
     sigma_net = ConductivityNet(hidden_layers=4, hidden_dim=128).to(device)
-    pot_net = PotentialNet().to(device)
-    informer = PhysicsInformer(sigma_net, pot_net)
+    pot_net = PotentialNet(conductivity_net=sigma_net).to(device)
+    informer = PhysicsInformer(sigma_net, pot_net, source_radius=gamma)
 
     print("Iniciando entrenamiento PINN con todo el dataset...")
     trained_pot_net, trained_sigma_net = train_pinn(
@@ -97,9 +102,11 @@ def main():
         weights=weights,
         current_I=current_I,
         gamma=gamma,
-        num_epochs_adam=1000,
-        num_epochs_lbfgs=1000,
-        lr=1e-3,
+        num_epochs_adam=args.epochs_adam,
+        num_epochs_lbfgs=args.epochs_lbfgs,
+        lr=args.lr,
+        lr_sigma=args.lr_sigma,
+        warmup_epochs=args.warmup_epochs,
         device=device,
         use_wandb=args.use_wandb,
     )

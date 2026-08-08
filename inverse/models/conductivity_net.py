@@ -177,6 +177,10 @@ class ConductivityNet(nn.Module):
             out_dim=1, 
             activation=nn.SiLU
         )
+        # Work in log-conductivity space.  The output is initialized at the
+        # 100 ohm-m background and remains bounded only by physical limits.
+        nn.init.zeros_(self.mlp.output_layer.weight)
+        nn.init.constant_(self.mlp.output_layer.bias, 0.0)
 
     def forward(self, coords: torch.Tensor) -> torch.Tensor:
         """
@@ -185,7 +189,12 @@ class ConductivityNet(nn.Module):
         ff = self.fourier_map(coords)
         raw_output = self.mlp(ff)
         
-        # Mapeo Sigmoide estricto para evitar explosiones de resistividad
-        sigma = self.sigma_min + (self.sigma_max - self.sigma_min) * torch.sigmoid(raw_output)
+        log_sigma_bg = math.log(0.01)
+        log_sigma = torch.clamp(
+            log_sigma_bg + raw_output,
+            min=math.log(self.sigma_min),
+            max=math.log(self.sigma_max),
+        )
+        sigma = torch.exp(log_sigma)
         
         return sigma

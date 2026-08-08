@@ -28,11 +28,11 @@ def train_pinn(
     num_epochs_adam: int = 1000,
     num_epochs_lbfgs: int = 500,
     lr: float = 1e-4,
+    lr_sigma: float = None,
+    warmup_epochs: int = 100,
     device: str = "cpu",
     use_wandb: bool = False,
 ):
-    del num_epochs_lbfgs  # Reserved for a future second-stage optimizer.
-
     if len(dataloader) == 0:
         raise ValueError("El dataloader está vacío. No hay datos para entrenar.")
 
@@ -40,7 +40,15 @@ def train_pinn(
     sigma_net = sigma_net.to(device)
 
     # Optimizador conjunto para permitir el flujo simultáneo del gradiente
-    optimizer_joint = optim.Adam(list(u_net.parameters()) + list(sigma_net.parameters()), lr=lr)
+    if lr_sigma is None:
+        lr_sigma = 0.5 * lr
+    optimizer_joint = optim.Adam(
+        [
+            {"params": list(u_net.parameters()), "lr": lr},
+            {"params": list(sigma_net.parameters()), "lr": lr_sigma},
+        ],
+        lr=lr,
+    )
     
     # Se utiliza CosineAnnealingWarmRestarts para permitir escapar de mínimos locales
     # El scheduler se actualiza por época (no por batch) porque T_0=200 está dimensionado en épocas.
@@ -88,7 +96,7 @@ def train_pinn(
     def squeeze_dict(d):
         return {k: v[0] for k, v in d.items() if isinstance(v, torch.Tensor)} or d
 
-    def _train_joint_step(dyn_weights, t):
+    def _train_joint_step(dyn_weights, t, do_step=True):
         """
         Entrenamiento Conjunto (Joint Optimization) de PotentialNet y ConductivityNet.
         Permite el flujo simultáneo del gradiente a través del colector de soluciones físicas.
@@ -116,6 +124,7 @@ def train_pinn(
         source_coords_flux_B = t["source_coords_flux_B"]
         area_Bc = t["area_Bc"]
         r_reg = t["r_reg"]
+        data_scale = t.get("data_scale", torch.tensor(1.0, device=device))
 
         # Restricción física: Forzar Z=0 para mediciones de superficie
         # Esto elimina fugas geométricas en la superficie causadas por precisión flotante
@@ -144,7 +153,9 @@ def train_pinn(
             # Keep a substantial, deterministic fraction of the real survey
             # in every step.  A 64-point random sample was too noisy for this
             # single-survey inverse problem and hid the measurement signal.
-            max_meas = min(512, num_meas)
+            # The regenerated benchmark has 824 measurements; use all of them
+            # so deep and oblique configurations are not randomly discarded.
+            max_meas = num_meas
             if num_meas > max_meas:
                 idx_meas = torch.randperm(num_meas, device=device)[:max_meas]
                 sub_source = source_data[idx_meas]
@@ -185,7 +196,7 @@ def train_pinn(
             else:
                 pred_u = u_tot_m
 
-            loss_data_u = torch.mean((pred_u - sub_target) ** 2)
+            loss_data_u = torch.mean(((pred_u - sub_target) / data_scale) ** 2)
 
             # 2. Guía débil de conductividad a partir de las mediciones.
             # Rho_a es una respuesta integrada, no una propiedad local.  Se
@@ -205,6 +216,7 @@ def train_pinn(
             inf_coords=r_D,
             source_coords_surf=source_coords_neumann if r_N.shape[0] > 0 else None,
             source_coords_inf=source_coords_dirichlet if r_D.shape[0] > 0 else None,
+            current_I=current_I,
         )
         loss_reg = informer.compute_reg_loss(r_reg)
         loss_flux = informer.compute_flux_loss(
@@ -223,7 +235,7 @@ def train_pinn(
 
         # Implementación de ponderación adaptativa basada en la magnitud de gradientes (Wang et al. 2021)
         if loss_pde.requires_grad and loss_data_u.requires_grad:
-            shared_params = list(u_net.parameters())
+            shared_params = list(u_net.parameters()) + list(sigma_net.parameters())
             
             grads_data = torch.autograd.grad(loss_data_u, shared_params, retain_graph=True, allow_unused=True)
             gn_data = torch.sqrt(sum(g.pow(2).sum() for g in grads_data if g is not None) + 1e-8)
@@ -283,11 +295,57 @@ def train_pinn(
         gn_s_pre = grad_norm_sigma_pre_clip.item() if isinstance(grad_norm_sigma_pre_clip, torch.Tensor) else grad_norm_sigma_pre_clip
         gn_s_post = min(gn_s_pre, 1.0)
         
-        optimizer_joint.step()
+        if do_step:
+            optimizer_joint.step()
         
         return loss_total, loss_data_u, loss_data_sigma, loss_pde, loss_bc, loss_reg, loss_flux, gn_u_pre, gn_u_post, gn_s_pre, gn_s_post, u_layer_grads, sigma_layer_grads, grad_norm_sigma_data, rmse_val, corr_val
 
-    print("Iniciando entrenamiento PINN con optimizacion conjunta (ReLoBRaLo)")
+    def _prepare_batch(batch):
+        """Convert one DataLoader item to a deterministic training batch."""
+        data_samples = squeeze_dict(batch["data"])
+        pde_samples = squeeze_dict(batch["pde"])
+        bc_neumann_samples = squeeze_dict(batch["bc_neumann"])
+        bc_dirichlet_samples = squeeze_dict(batch["bc_dirichlet"])
+        flux_samples = squeeze_dict(batch["flux"])
+        flux_samples["area_Bc"] = batch["flux"]["area_Bc"][0].item()
+        reg_samples = squeeze_dict(batch["reg"])
+
+        r_pde = prepare(pde_samples["r"], requires_grad=True)
+        r_N = prepare(bc_neumann_samples["r_N"], requires_grad=True)
+        r_D = prepare(bc_dirichlet_samples["r_D"])
+        r_Bc_A = prepare(flux_samples["r_Bc_A"], requires_grad=True)
+        r_Bc_B = prepare(flux_samples["r_Bc_B"], requires_grad=True)
+        source_coords_pde = (
+            prepare(pde_samples["source"])
+            if "source" in pde_samples
+            else torch.cat([prepare(pde_samples["r_A"]), prepare(pde_samples["r_B"])], dim=-1)
+        )
+        data_target = prepare(data_samples.get("delta_v", data_samples["u_star"]))
+        return {
+            "r_m": prepare(data_samples["r_m"]),
+            "r_n": prepare(data_samples["r_n"]) if "r_n" in data_samples else None,
+            "data_target": data_target,
+            "data_scale": data_target.abs().mean().clamp_min(1e-3),
+            "r_sigma": prepare(data_samples["r_sigma"]),
+            "log_sigma_target": prepare(data_samples["log_sigma_target"]),
+            "source_data": prepare(data_samples["source"]) if "source" in data_samples else None,
+            "r_pde": r_pde,
+            "source_coords_pde": source_coords_pde,
+            "r_N": r_N,
+            "source_coords_neumann": prepare(bc_neumann_samples["source"]),
+            "r_D": r_D,
+            "source_coords_dirichlet": prepare(bc_dirichlet_samples["source"]),
+            "r_Bc_A": r_Bc_A,
+            "n_Bc_A": prepare(flux_samples["n_Bc_A"]),
+            "r_Bc_B": r_Bc_B,
+            "n_Bc_B": prepare(flux_samples["n_Bc_B"]),
+            "source_coords_flux_A": prepare(flux_samples["source_A"]),
+            "source_coords_flux_B": prepare(flux_samples["source_B"]),
+            "area_Bc": flux_samples["area_Bc"],
+            "r_reg": prepare(reg_samples["r_reg"], requires_grad=True),
+        }
+
+    print("Iniciando entrenamiento PINN acoplado con datos de voltaje y PDE")
     pbar_adam = tqdm(range(num_epochs_adam), desc="Adam")
 
     consecutive_degenerate_epochs = 0
@@ -313,65 +371,7 @@ def train_pinn(
         # Barra de progreso interna para las 1000 iteraciones (batches) de la época
         pbar_batches = tqdm(dataloader, desc=f"Epoch {epoch}/{num_epochs_adam}", leave=False)
         for batch in pbar_batches:
-            data_samples = squeeze_dict(batch["data"])
-            pde_samples = squeeze_dict(batch["pde"])
-            bc_neumann_samples = squeeze_dict(batch["bc_neumann"])
-            bc_dirichlet_samples = squeeze_dict(batch["bc_dirichlet"])
-            flux_samples = squeeze_dict(batch["flux"])
-            flux_samples["area_Bc"] = batch["flux"]["area_Bc"][0].item()
-            reg_samples = squeeze_dict(batch["reg"])
-            
-            # Preparar todos los tensores
-            r_pde = prepare(pde_samples["r"], requires_grad=True)
-            r_N = prepare(bc_neumann_samples["r_N"], requires_grad=True)
-            r_D = prepare(bc_dirichlet_samples["r_D"])
-            r_Bc_A = prepare(flux_samples["r_Bc_A"], requires_grad=True)
-            r_Bc_B = prepare(flux_samples["r_Bc_B"], requires_grad=True)
-
-            source_coords_pde = (
-                prepare(pde_samples["source"])
-                if "source" in pde_samples
-                else torch.cat([prepare(pde_samples["r_A"]), prepare(pde_samples["r_B"])], dim=-1)
-            )
-
-            tensors = {
-                "r_m": prepare(data_samples["r_m"]),
-                "r_n": prepare(data_samples["r_n"]) if "r_n" in data_samples else None,
-                "data_target": prepare(data_samples.get("delta_v", data_samples["u_star"])),
-                "r_sigma": prepare(data_samples["r_sigma"]),
-                "log_sigma_target": prepare(data_samples["log_sigma_target"]),
-                "source_data": prepare(data_samples["source"]) if "source" in data_samples else None,
-                "r_pde": r_pde,
-                "source_coords_pde": source_coords_pde,
-                "r_N": r_N,
-                "source_coords_neumann": (
-                    prepare(bc_neumann_samples["source"])
-                    if "source" in bc_neumann_samples
-                    else source_coords_pde[: r_N.shape[0]]
-                ),
-                "r_D": r_D,
-                "source_coords_dirichlet": (
-                    prepare(bc_dirichlet_samples["source"])
-                    if "source" in bc_dirichlet_samples
-                    else source_coords_pde[: r_D.shape[0]]
-                ),
-                "r_Bc_A": r_Bc_A,
-                "n_Bc_A": prepare(flux_samples["n_Bc_A"]),
-                "r_Bc_B": r_Bc_B,
-                "n_Bc_B": prepare(flux_samples["n_Bc_B"]),
-                "source_coords_flux_A": (
-                    prepare(flux_samples["source_A"])
-                    if "source_A" in flux_samples
-                    else source_coords_pde[: r_Bc_A.shape[0]]
-                ),
-                "source_coords_flux_B": (
-                    prepare(flux_samples["source_B"])
-                    if "source_B" in flux_samples
-                    else source_coords_pde[: r_Bc_B.shape[0]]
-                ),
-                "area_Bc": flux_samples["area_Bc"],
-                "r_reg": prepare(reg_samples["r_reg"], requires_grad=True)
-            }
+            tensors = _prepare_batch(batch)
 
             # Entrenamiento Conjunto del Batch
             res = _train_joint_step(dyn_weights, tensors)
@@ -430,7 +430,8 @@ def train_pinn(
         # Por lo tanto, no es necesario un actualizador por época aquí.
         
         # El scheduler se actualiza por época
-        scheduler_joint.step()
+        if epoch >= warmup_epochs:
+            scheduler_joint.step()
 
         current_lr = optimizer_joint.param_groups[0]["lr"]
 
@@ -512,6 +513,40 @@ def train_pinn(
             shutil.move(temp_path, checkpoint_path)
 
         pbar_adam.set_postfix(loss=f"{epoch_losses['total']:.4e}", lr=f"{current_lr:.2e}")
+
+    if num_epochs_lbfgs > 0:
+        # Refine the deterministic single-survey solution with the full batch.
+        # LBFGS requires a closure because it evaluates the same objective
+        # several times during a line search.
+        fixed_batch = next(iter(dataloader))
+        lbfgs_tensors = _prepare_batch(fixed_batch)
+        optimizer_lbfgs = optim.LBFGS(
+            list(u_net.parameters()) + list(sigma_net.parameters()),
+            lr=0.5,
+            max_iter=1,
+            history_size=20,
+            line_search_fn="strong_wolfe",
+        )
+        print("Refinando la solución con LBFGS")
+        for _ in tqdm(range(num_epochs_lbfgs), desc="LBFGS"):
+            def closure():
+                optimizer_lbfgs.zero_grad()
+                result = _train_joint_step(dyn_weights, lbfgs_tensors, do_step=False)
+                return result[0]
+
+            optimizer_lbfgs.step(closure)
+
+    import os
+    os.makedirs("checkpoints", exist_ok=True)
+    torch.save(
+        {
+            "epoch_adam": num_epochs_adam,
+            "epochs_lbfgs": num_epochs_lbfgs,
+            "u_net_state_dict": u_net.state_dict(),
+            "sigma_net_state_dict": sigma_net.state_dict(),
+        },
+        "checkpoints/final_checkpoint.pth",
+    )
 
     return u_net, sigma_net
 

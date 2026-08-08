@@ -53,15 +53,18 @@ def test_half_space_source_normalization():
     coords = torch.empty(n, 3)
     coords[:, 0].uniform_(-50.0, 50.0)
     coords[:, 1].uniform_(-20.0, 20.0)
-    coords[:, 2].uniform_(-40.0, 0.0)
+    coords[:, 2].uniform_(0.0, 50.0)
 
     center = torch.tensor([[0.0, 0.0, 0.0]]).repeat(n, 1)
-    gaussian = torch.exp(-torch.sum((coords - center) ** 2, dim=1, keepdim=True) / 16.0)
-    volume = 100.0 * 40.0 * 40.0
+    gamma = 4.0
+    gaussian = (2.0 / (torch.pi ** 1.5 * gamma ** 3)) * torch.exp(
+        -torch.sum((coords - center) ** 2, dim=1, keepdim=True) / gamma ** 2
+    )
+    volume = 100.0 * 40.0 * 50.0
     integral = gaussian.mean().item() * volume
 
-    ok = math.isfinite(integral) and integral > 0.0
-    print(f"  Integral={integral:.4f}, expected finite and positive")
+    ok = abs(integral - 1.0) < 0.15
+    print(f"  Integral={integral:.4f}, expected approximately 1.0")
     print(f"  {'PASS' if ok else 'FAIL'}")
     return ok
 
@@ -85,9 +88,9 @@ def test_dataset_voltage_targets():
     print("TEST 4: Dataset returns voltage-difference targets")
     print("=" * 60)
 
-    dataset_path = Path(__file__).resolve().parents[1] / "forward" / "dataset" / "dataset_validation.h5"
+    dataset_path = Path(__file__).resolve().parents[1] / "dataset_output_test" / "measurements.csv"
     if not dataset_path.exists():
-        print("  SKIP: dataset_validation.h5 not found")
+        print("  SKIP: regenerated campaign CSV not found")
         return True
 
     ds = ERTDataset(dataset_path, n_pde=8, n_bc_surf=4, n_bc_inf=5, n_flux=4, epsilon=4.0)
@@ -106,9 +109,32 @@ def test_dataset_voltage_targets():
     return ok
 
 
+def test_voltage_gradient_reaches_conductivity():
+    print("\n" + "=" * 60)
+    print("TEST 5: Voltage loss is coupled to conductivity")
+    print("=" * 60)
+
+    sigma_net = ConductivityNet(num_frequencies=4, hidden_layers=1, hidden_dim=16)
+    pot_net = PotentialNet(
+        num_frequencies=4,
+        hidden_layers=1,
+        hidden_dim=16,
+        conductivity_net=sigma_net,
+    )
+    coords = torch.rand(32, 3) * torch.tensor([100.0, 100.0, 50.0])
+    source = torch.zeros(32, 6)
+    loss = pot_net(coords, source).square().mean()
+    grads = torch.autograd.grad(loss, sigma_net.parameters(), allow_unused=True)
+    grad_norm = sum(g.abs().sum().item() for g in grads if g is not None)
+    ok = math.isfinite(grad_norm) and grad_norm > 0.0
+    print(f"  ||dL_voltage/dsigma||={grad_norm:.4e}")
+    print(f"  {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def test_losses_are_finite():
     print("\n" + "=" * 60)
-    print("TEST 5: PDE, BC, regularization, and flux losses are finite")
+    print("TEST 6: PDE, BC, regularization, and flux losses are finite")
     print("=" * 60)
 
     informer, _, _ = _small_informer()
@@ -153,6 +179,7 @@ if __name__ == "__main__":
         ("Half-space Source", test_half_space_source_normalization),
         ("Sigma Positivity", test_sigma_positivity),
         ("Dataset DeltaV", test_dataset_voltage_targets),
+        ("Voltage-Sigma Coupling", test_voltage_gradient_reaches_conductivity),
         ("Finite Losses", test_losses_are_finite),
     ]
 

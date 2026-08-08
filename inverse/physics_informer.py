@@ -3,9 +3,10 @@ import torch.autograd as autograd
 
 
 class PhysicsInformer:
-    def __init__(self, cond_net, pot_net):
+    def __init__(self, cond_net, pot_net, source_radius=1e-3):
         self.cond_net = cond_net
         self.pot_net = pot_net
+        self.source_radius = float(source_radius)
 
     def compute_derivatives(self, coords, source_coords=None):
         coords.requires_grad_(True)
@@ -77,14 +78,14 @@ class PhysicsInformer:
         }
 
     def compute_grad_u_pri(self, coords, r_A, r_B, I, sigma_0=0.01):
-        eps = 1e-6
+        eps2 = self.source_radius ** 2
         r_dist_A = coords - r_A
-        d_A = torch.sqrt(torch.sum(r_dist_A**2, dim=-1, keepdim=True) + eps)
-        grad_A = -r_dist_A / (d_A**3 + eps)
+        d_A = torch.sqrt(torch.sum(r_dist_A**2, dim=-1, keepdim=True) + eps2)
+        grad_A = -r_dist_A / (d_A**3)
         
         r_dist_B = coords - r_B
-        d_B = torch.sqrt(torch.sum(r_dist_B**2, dim=-1, keepdim=True) + eps)
-        grad_B = -r_dist_B / (d_B**3 + eps)
+        d_B = torch.sqrt(torch.sum(r_dist_B**2, dim=-1, keepdim=True) + eps2)
+        grad_B = -r_dist_B / (d_B**3)
 
         # Pole sources are encoded by B == A by ERTDataset.  Their primary
         # field is a monopole, not a dipole whose two terms cancel.
@@ -98,9 +99,9 @@ class PhysicsInformer:
             return torch.zeros(coords.shape[0], 1, device=coords.device)
         r_A = source_coords[:, 0:3]
         r_B = source_coords[:, 3:6]
-        eps = 1e-6
-        d_A = torch.sqrt(torch.sum((coords - r_A)**2, dim=-1, keepdim=True) + eps)
-        d_B = torch.sqrt(torch.sum((coords - r_B)**2, dim=-1, keepdim=True) + eps)
+        eps2 = self.source_radius ** 2
+        d_A = torch.sqrt(torch.sum((coords - r_A)**2, dim=-1, keepdim=True) + eps2)
+        d_B = torch.sqrt(torch.sum((coords - r_B)**2, dim=-1, keepdim=True) + eps2)
         is_pole = (torch.linalg.norm(r_A - r_B, dim=-1, keepdim=True) < 1e-5).to(d_A.dtype)
         secondary = (1.0 - is_pole) / d_B
         return (I / (2 * torch.pi * sigma_0)) * (1.0 / d_A - secondary)
@@ -119,18 +120,34 @@ class PhysicsInformer:
         source_term = torch.sum(grad_sigma * grad_u_pri, dim=-1, keepdim=True)
         
         residual = div_flux_sec + source_term
+        distance_A = torch.linalg.norm(coords - r_A, dim=-1)
+        distance_B = torch.linalg.norm(coords - r_B, dim=-1)
+        is_pole = torch.linalg.norm(r_A - r_B, dim=-1, keepdim=True) < 1e-5
+        valid = (distance_A > self.source_radius) & (
+            (distance_B > self.source_radius) | (is_pole.squeeze(-1).bool())
+        )
+        if torch.any(valid):
+            residual = residual[valid]
         return torch.mean(residual**2)
 
-    def compute_bc_loss(self, surface_coords, inf_coords, source_coords_surf, source_coords_inf):
+    def compute_bc_loss(self, surface_coords, inf_coords, source_coords_surf, source_coords_inf, current_I=1.0):
         loss = None
         if surface_coords is not None and surface_coords.shape[0] > 0:
             derivs_surf = self.compute_derivatives(surface_coords, source_coords_surf)
-            flux_z = derivs_surf["sigma"] * derivs_surf["du_dz"]
+            grad_primary = self.compute_grad_u_pri(
+                surface_coords,
+                source_coords_surf[:, 0:3],
+                source_coords_surf[:, 3:6],
+                current_I,
+            )
+            flux_z = derivs_surf["sigma"] * (derivs_surf["du_dz"] + grad_primary[:, 2:3])
             loss_neumann = torch.mean(flux_z ** 2)
             loss = loss_neumann if loss is None else loss + loss_neumann
 
         if inf_coords is not None and inf_coords.shape[0] > 0:
-            u_inf = self.pot_net(inf_coords, source_coords_inf)
+            u_inf = self.pot_net(inf_coords, source_coords_inf) + self.compute_u_pri(
+                inf_coords, source_coords_inf, current_I
+            )
             loss_dirichlet = torch.mean(u_inf**2)
             loss = loss_dirichlet if loss is None else loss + loss_dirichlet
 
@@ -157,8 +174,10 @@ class PhysicsInformer:
         loss_tv = torch.mean(tv_norm)
         
         # Background reference penalty
-        rho = 1.0 / sigma
-        loss_bg = torch.mean((rho - rho_bg)**2) * 1e-4
+        log_sigma = torch.log(torch.clamp(sigma, min=1e-6))
+        loss_bg = torch.mean(
+            (log_sigma - torch.log(torch.tensor(1.0 / rho_bg, device=sigma.device))) ** 2
+        )
         
         return loss_tv + loss_bg
 

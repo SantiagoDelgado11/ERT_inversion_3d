@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import weakref
 from typing import Optional, List
 from .conductivity_net import PositionalEncoding, ResidualMLP
 
@@ -16,11 +17,15 @@ class PotentialNet(nn.Module):
         hidden_dim: int = 256, 
         domain_scale: float = 50.0,
         source_scale: float = 50.0,
-        normalization: Optional[str] = 'WeightNorm'
+        normalization: Optional[str] = 'WeightNorm',
+        conductivity_net: Optional[nn.Module] = None,
     ):
         super().__init__()
             
         self.source_scale = source_scale
+        # Keep a weak reference so sigma parameters are not registered twice
+        # when both networks are passed to the joint optimizer.
+        self._conductivity_net_ref = weakref.ref(conductivity_net) if conductivity_net is not None else None
         
         # Mapeo NeRF de (x,y,z) reutilizado de ConductivityNet
         self.fourier_map = PositionalEncoding(
@@ -39,7 +44,9 @@ class PotentialNet(nn.Module):
         # - 1 / (||r_A|| + eps): 1
         # - 1 / (||r_B|| + eps): 1
         # Total extra = 6 + 3 + 3 + 1 + 1 + 1 + 1 = 16
-        in_dim = self.fourier_map.out_features + 16
+        # log(sigma) is included so voltage data can backpropagate directly
+        # into the conductivity model instead of relying only on the PDE.
+        in_dim = self.fourier_map.out_features + 16 + (1 if conductivity_net is not None else 0)
         
         self.mlp = ResidualMLP(
             in_dim=in_dim,
@@ -92,6 +99,11 @@ class PotentialNet(nn.Module):
             inv_d_A, 
             inv_d_B
         ], dim=-1)
+
+        if self._conductivity_net_ref is not None:
+            conductivity_net = self._conductivity_net_ref()
+            log_sigma = torch.log(torch.clamp(conductivity_net(coords), min=1e-6))
+            x = torch.cat([x, log_sigma], dim=-1)
         
         # 4. Paso por la MLP residual
         u = self.mlp(x)

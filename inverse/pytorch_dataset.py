@@ -43,6 +43,7 @@ class ERTDataset(Dataset):
         self._validate_campaign_ground_truth()
 
         self.n_samples = 1
+        self.current_I = 1.0
 
     def _validate_campaign_ground_truth(self):
         """Fail early when a synthetic campaign lost its configured anomaly."""
@@ -209,7 +210,7 @@ class ERTDataset(Dataset):
 
         required = {
             'A_x', 'A_y', 'A_z', 'B_x', 'B_y', 'B_z',
-            'M_x', 'M_y', 'M_z', 'N_x', 'N_y', 'N_z', 'V', 'Rho_a'
+            'M_x', 'M_y', 'M_z', 'N_x', 'N_y', 'N_z', 'V', 'I', 'Rho_a'
         }
         missing = sorted(required.difference(df.columns))
         if missing:
@@ -229,8 +230,12 @@ class ERTDataset(Dataset):
 
         rho_a_np = df['Rho_a'].to_numpy(dtype=np.float32)
         delta_v_np = df['V'].to_numpy(dtype=np.float32)
-        if not np.isfinite(delta_v_np).all() or not np.isfinite(rho_a_np).all():
-            raise ValueError("measurements.csv contiene V o Rho_a no finitos")
+        current_np = df['I'].to_numpy(dtype=np.float32)
+        if not np.isfinite(delta_v_np).all() or not np.isfinite(rho_a_np).all() or not np.isfinite(current_np).all():
+            raise ValueError("measurements.csv contiene V, I o Rho_a no finitos")
+        if not np.allclose(current_np, current_np[0], rtol=1e-5, atol=1e-7):
+            raise ValueError("La PINN actual requiere una corriente I constante por campaña")
+        self.current_I = float(current_np[0])
 
         # Apparent resistivity is an integrated response.  Use only its
         # low-resistivity contrast as a weak anomaly indicator; fitting rho_a

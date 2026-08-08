@@ -3,9 +3,9 @@ from models import ConductivityNet, PotentialNet
 
 def main():
     print("Testing ConductivityNet instantiation...")
-    cnet = ConductivityNet()
+    cnet = ConductivityNet(hidden_layers=4, hidden_dim=128)
     print("Testing PotentialNet instantiation...")
-    pnet = PotentialNet()
+    pnet = PotentialNet(hidden_layers=5, hidden_dim=256, conductivity_net=cnet)
     
     print("Loading state_dicts...")
     try:
