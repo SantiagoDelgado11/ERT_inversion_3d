@@ -19,14 +19,16 @@ except ImportError:
 def main():
     parser = argparse.ArgumentParser(description="Entrenamiento PINN para ERT 3D")
     parser.add_argument("--w_data", type=float, default=1.0, help="Peso para el data loss")
-    parser.add_argument("--w_data_sigma", type=float, default=0.25, help="Peso de la guia pseudo-profunda de conductividad")
-    parser.add_argument("--w_pde", type=float, default=1e-4, help="Peso para el PDE loss")
-    parser.add_argument("--w_bc", type=float, default=10.0, help="Peso para condiciones de frontera")
-    parser.add_argument("--w_reg", type=float, default=1e-4, help="Peso de regularizacion TV")
-    parser.add_argument("--w_flux", type=float, default=1e-2, help="Peso para conservacion de flujo")
+    parser.add_argument("--w_data_sigma", type=float, default=0.0, help="Peso opcional de la guia pseudo-profunda de conductividad")
+    parser.add_argument("--w_pde", type=float, default=1.0, help="Peso para el residual PDE")
+    parser.add_argument("--w_bc", type=float, default=1.0, help="Peso para condiciones de frontera")
+    parser.add_argument("--w_reg", type=float, default=1e-6, help="Peso de regularizacion TV sobre log(sigma)")
+    parser.add_argument("--w_flux", type=float, default=1.0, help="Peso para conservacion de flujo")
     parser.add_argument("--use_wandb", action="store_true", help="Activar logging en Weights & Biases")
     parser.add_argument("--wandb_project", type=str, default="ERT_PINN_3D")
     parser.add_argument("--wandb_name", type=str, default="baseline_training_run")
+    parser.add_argument("--csv", type=str, default="dataset_output/measurements.csv",
+                        help="CSV de mediciones generado junto a campaign.h5")
     args = parser.parse_args()
 
     if args.use_wandb:
@@ -52,7 +54,9 @@ def main():
     print(f"Iniciando entrenamiento en: {device}")
 
     repo_root = Path(__file__).resolve().parents[1]
-    csv_filepath = repo_root / "dataset_output" / "measurements.csv"
+    csv_filepath = Path(args.csv)
+    if not csv_filepath.is_absolute():
+        csv_filepath = repo_root / csv_filepath
     current_I = 1.0
     gamma = 4.0
 

@@ -144,15 +144,16 @@ class PhysicsInformer:
         ds_dx, ds_dy, ds_dz = derivs["ds_dx"], derivs["ds_dy"], derivs["ds_dz"]
         sigma = derivs["sigma"]
 
-        # TV on resistivity rho = 1/sigma -> grad(rho) = -grad(sigma) / sigma^2
-        sigma_sq = sigma ** 2
-        drho_dx = -ds_dx / sigma_sq
-        drho_dy = -ds_dy / sigma_sq
-        drho_dz = -ds_dz / sigma_sq
+        # Regularize log(sigma), not rho.  The latter amplifies gradients in
+        # low-conductivity background and suppresses the anomaly contrast.
+        inv_sigma = 1.0 / torch.clamp(sigma, min=1e-6)
+        dlog_dx = ds_dx * inv_sigma
+        dlog_dy = ds_dy * inv_sigma
+        dlog_dz = ds_dz * inv_sigma
 
-        # Edge-Preserving TV (Huber norm approx)
+        # Edge-preserving TV (Huber norm approximation).
         eps_tv = 1e-2
-        tv_norm = torch.sqrt(drho_dx**2 + drho_dy**2 + drho_dz**2 + eps_tv**2) - eps_tv
+        tv_norm = torch.sqrt(dlog_dx**2 + dlog_dy**2 + dlog_dz**2 + eps_tv**2) - eps_tv
         loss_tv = torch.mean(tv_norm)
         
         # Background reference penalty
@@ -162,5 +163,53 @@ class PhysicsInformer:
         return loss_tv + loss_bg
 
     def compute_flux_loss(self, *args, **kwargs):
-        device = args[0].device if args[0] is not None else torch.device("cpu")
-        return torch.tensor(0.0, device=device)
+        """Enforce the injected/extracted current on control hemispheres.
+
+        The outward flux of ``sigma * grad(u_total)`` is ``-I`` around an
+        injection pole and ``+I`` around a finite sink.  Pole surveys encode
+        the sink at infinity as ``B == A``; in that case only the injection
+        hemisphere is constrained.
+        """
+        if len(args) >= 8:
+            r_A, r_B, n_A, n_B, source_A, source_B, current_I, area = args[:8]
+        elif len(args) >= 6:
+            r_A, r_B, n_A, n_B, source_A, source_B = args[:6]
+            current_I = kwargs.get("I", kwargs.get("current_I", 1.0))
+            area = kwargs.get("area")
+        else:
+            raise TypeError("compute_flux_loss requiere al menos 6 argumentos")
+        if area is None:
+            raise TypeError("compute_flux_loss requiere el area de la superficie")
+        if r_A is None or r_A.shape[0] == 0:
+            return torch.tensor(0.0, device=self._device_from(r_B))
+
+        def integrated_flux(coords, normals, source):
+            derivs = self.compute_derivatives(coords, source)
+            grad_primary = self.compute_grad_u_pri(
+                coords,
+                source[:, 0:3],
+                source[:, 3:6],
+                current_I,
+            )
+            grad_total = torch.cat(
+                [derivs["du_dx"], derivs["du_dy"], derivs["du_dz"]], dim=-1
+            ) + grad_primary
+            flux_density = derivs["sigma"] * torch.sum(grad_total * normals, dim=-1, keepdim=True)
+            return flux_density.mean() * area
+
+        flux_A = integrated_flux(r_A, n_A, source_A)
+        loss = (flux_A + current_I) ** 2
+
+        finite_sink = torch.linalg.norm(
+            source_B[:, 0:3] - source_B[:, 3:6], dim=-1
+        ) >= 1e-5
+        if torch.any(finite_sink):
+            flux_B = integrated_flux(
+                r_B[finite_sink], n_B[finite_sink], source_B[finite_sink]
+            )
+            loss = loss + (flux_B - current_I) ** 2
+        return loss
+
+    @staticmethod
+    def _device_from(tensor):
+        return tensor.device if tensor is not None else torch.device("cpu")

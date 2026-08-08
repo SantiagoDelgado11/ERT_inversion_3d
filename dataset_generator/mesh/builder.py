@@ -46,12 +46,22 @@ class MeshGenerator:
         # Refine around electrodes
         try:
             # Modern discretize API
-            mesh.refine_points(electrodes, level=-1, padding_cells_by_level=[2, 2, 2])
+            mesh.refine_points(
+                electrodes,
+                level=-1,
+                padding_cells_by_level=[2, 2, 2],
+                finalize=False,
+            )
             
             # Refine around sphere anomaly
             center = np.array([anomaly['x'], anomaly['y'], anomaly['z']])
             radius = anomaly['r']
-            mesh.refine_ball(center, radius + self.cfg.core_cell_size, [-1])
+            mesh.refine_ball(
+                center,
+                radius + self.cfg.core_cell_size,
+                [-1],
+                finalize=False,
+            )
         except (AttributeError, TypeError):
             # Fallback for older discretize versions
             mesh = discretize.utils.refine_tree_xyz(
@@ -66,18 +76,45 @@ class MeshGenerator:
         # Domain: [0, Lx] x [0, Ly] x [0, Lz]
         # In modern discretize, we can use refine_box
         try:
-            bbox_min = np.array([0.0, 0.0, 0.0])
-            bbox_max = np.array([self.domain.x_length, self.domain.y_length, self.domain.z_length])
-            mesh.refine_bounding_box(bbox_min, bbox_max, [-3])
+            bbox = np.array([
+                [0.0, 0.0, 0.0],
+                [self.domain.x_length, self.domain.y_length, self.domain.z_length],
+            ])
+            mesh.refine_bounding_box(bbox, level=-3, finalize=False)
         except Exception:
             pass
             
         # Finalize the tree
-        # mesh.finalize() # Implicit in modern discretize or already done if fallback wasn't needed
-        # But to be safe:
-        if not hasattr(mesh, 'n_cells'):
-             pass # some versions require finalize, but newer ones don't have it.
-        
+        mesh.finalize()
+
+        centers = mesh.cell_centers
+        if (
+            centers[:, 0].min() > 0.0
+            or centers[:, 0].max() < self.domain.x_length
+            or centers[:, 1].min() > 0.0
+            or centers[:, 1].max() < self.domain.y_length
+            or centers[:, 2].min() > 0.0
+            or centers[:, 2].max() < self.domain.z_length
+        ):
+            # mesh_builder_xyz assumes a signed-up vertical axis.  The
+            # campaign uses positive depth, so use a uniform domain mesh when
+            # that helper does not cover the requested positive-z volume.
+            h = float(self.cfg.core_cell_size)
+            nx = int(np.ceil(self.domain.x_length / h))
+            ny = int(np.ceil(self.domain.y_length / h))
+            nz = int(np.ceil(self.domain.z_length / h))
+            npad = int(np.ceil(self.cfg.padding_cells * self.cfg.padding_factor))
+            pad = npad * h
+            mesh = discretize.TensorMesh(
+                [np.full(nx + 2 * npad, h),
+                 np.full(ny + 2 * npad, h),
+                 np.full(nz, h)],
+                x0=np.array([-pad, -pad, 0.0]),
+            )
+            centers = mesh.cell_centers
+            if centers[:, 2].max() + 0.5 * h < self.domain.z_length:
+                raise ValueError("La malla no cubre la profundidad configurada")
+
         return mesh
         
     def get_active_cells(self, mesh: discretize.TreeMesh) -> np.ndarray:

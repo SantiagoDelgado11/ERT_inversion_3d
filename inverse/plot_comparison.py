@@ -10,26 +10,20 @@ from pathlib import Path
 def plot_comparison(npy_path, h5_path, output_png):
     # Cargar predicción
     rho_pred = np.load(npy_path)
-    if rho_pred.shape == (50, 50, 25):
-        rho_pred = np.repeat(np.repeat(np.repeat(rho_pred, 2, 0), 2, 1), 2, 2)
-        
-    # Reconstruir Ground Truth
+    # Use the exact discretized ground truth saved with the campaign.
     with h5py.File(h5_path, "r") as handle:
-        metadata = handle["metadata"].attrs
-        nx, ny, nz = 100, 100, 50
-        gx = np.linspace(0.5, 99.5, nx)
-        gy = np.linspace(0.5, 99.5, ny)
-        gz = np.linspace(0.5, 49.5, nz)
-        X, Y, Z = np.meshgrid(gx, gy, gz, indexing="ij")
-        
-        sx = float(metadata.get("sphere_x", 50.0))
-        sy = float(metadata.get("sphere_y", 50.0))
-        sz = float(metadata.get("sphere_z", 25.0))
-        sr = float(metadata.get("sphere_r", 10.0))
-        
-        distance = np.sqrt((X - sx)**2 + (Y - sy)**2 + (Z - sz)**2)
-        target_rho = np.full((nx, ny, nz), float(metadata.get("bg_resistivity", 100.0)), dtype=np.float32)
-        target_rho[distance <= sr] = float(metadata.get("sphere_rho", 30.0))
+        gt = handle["ground_truth_conductivity"]
+        sigma_true = np.asarray(gt["conductivity_tensor"], dtype=np.float32)
+        gx = np.asarray(gt["grid_x"], dtype=np.float32)
+        gy = np.asarray(gt["grid_y"], dtype=np.float32)
+        gz = np.asarray(gt["grid_z"], dtype=np.float32)
+        nx, ny, nz = sigma_true.shape
+        target_rho = 1.0 / np.maximum(sigma_true, 1e-8)
+
+    if rho_pred.shape != target_rho.shape:
+        from scipy.ndimage import zoom
+        factors = tuple(t / p for t, p in zip(target_rho.shape, rho_pred.shape))
+        rho_pred = zoom(rho_pred, factors, order=1)
         
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
     

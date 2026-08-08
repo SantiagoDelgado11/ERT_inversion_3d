@@ -34,6 +34,8 @@ class DatasetValidator:
         for val in unique_vals:
             if not (np.isclose(val, bg_cond, atol=1e-5) or np.isclose(val, sp_cond, atol=1e-5)):
                 raise ValueError(f"Validation failed: Unexpected conductivity value found {val}.")
+        if not np.any(np.isclose(active_model, sp_cond, rtol=1e-5, atol=1e-7)):
+            raise ValueError("Validation failed: The configured anomaly is absent from the active mesh.")
                 
         # 4. True 3D Acquisition check
         # Check if we have measurements where A and M are on different lines (Y coords differ)

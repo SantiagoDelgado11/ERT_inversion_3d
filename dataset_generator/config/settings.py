@@ -30,6 +30,7 @@ class SurveyConfig:
     max_a_spacing: int = 6 # Max dipole size (MN) multiplier
     
     injected_current: float = 1.0
+    min_measurements: int = 1
 
 @dataclass
 class MeshConfig:

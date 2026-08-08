@@ -40,26 +40,54 @@ class ERTDataset(Dataset):
             self.z_max,
         ) = self._load_domain_bounds()
 
+        self._validate_campaign_ground_truth()
+
         self.n_samples = 1
+
+    def _validate_campaign_ground_truth(self):
+        """Fail early when a synthetic campaign lost its configured anomaly."""
+        h5_path = Path(self.csv_filepath).with_name("campaign.h5")
+        if not h5_path.exists():
+            return
+        try:
+            with h5py.File(h5_path, "r") as handle:
+                metadata = handle["metadata"].attrs
+                gt = np.asarray(
+                    handle["ground_truth_conductivity/conductivity_tensor"]
+                )
+                has_configured_anomaly = float(metadata.get("sphere_r", 0.0)) > 0.0
+        except (OSError, KeyError, ValueError):
+            return
+
+        if has_configured_anomaly and float(np.ptp(gt)) < 1e-8:
+            raise ValueError(
+                f"{h5_path} no contiene la anomalía configurada: "
+                "la malla forward quedó fuera del cuerpo anómalo. "
+                "Regenera el campaign después de corregir la malla."
+            )
 
     def __len__(self):
         return self.n_samples
 
     def _load_domain_bounds(self):
-        """Use the forward core mesh as the inverse collocation domain."""
-        # The generated campaign uses x,y in [0, 100], z=0 at the surface,
-        # and negative z below the surface.  Keep this convention even when
-        # the optional forward mesh configuration is not present.
-        fallback = (0.0, 100.0, 0.0, 100.0, -50.0, 0.0)
-        config_path = Path(__file__).resolve().parents[1] / "forward" / "configs" / "mesh.yaml"
+        """Load the same positive-depth convention used by the forward model."""
+        fallback = (0.0, 100.0, 0.0, 100.0, 0.0, 50.0)
+        h5_path = Path(self.csv_filepath).with_name("campaign.h5")
         try:
-            with open(config_path, "r") as f:
-                mesh_config = yaml.safe_load(f)["mesh"]
-            x_half = 0.5 * mesh_config["nx"] * mesh_config["hx"]
-            y_half = 0.5 * mesh_config["ny"] * mesh_config["hy"]
-            z_depth = mesh_config["nz"] * mesh_config["hz"]
-            return (-x_half, x_half, -y_half, y_half, -z_depth, 0.0)
-        except Exception:
+            with h5py.File(h5_path, "r") as handle:
+                gt = handle["ground_truth_conductivity"]
+                gx = np.asarray(gt["grid_x"])
+                gy = np.asarray(gt["grid_y"])
+                gz = np.asarray(gt["grid_z"])
+                dx = float(np.median(np.diff(gx))) if gx.size > 1 else 1.0
+                dy = float(np.median(np.diff(gy))) if gy.size > 1 else 1.0
+                dz = float(np.median(np.diff(gz))) if gz.size > 1 else 1.0
+                return (
+                    float(gx.min() - 0.5 * dx), float(gx.max() + 0.5 * dx),
+                    float(gy.min() - 0.5 * dy), float(gy.max() + 0.5 * dy),
+                    0.0, float(gz.max() + 0.5 * dz),
+                )
+        except (OSError, KeyError, ValueError):
             return fallback
 
     @staticmethod
@@ -155,7 +183,8 @@ class ERTDataset(Dataset):
         num_points = source_coords.shape[0]
         phi = torch.empty(num_points, 1).uniform_(0, 2 * np.pi)
         if half_sphere:
-            theta = torch.empty(num_points, 1).uniform_(np.pi / 2, np.pi)
+            # The subsurface is z >= 0, so the lower hemisphere points down.
+            theta = torch.empty(num_points, 1).uniform_(0, np.pi / 2)
             area = 2 * np.pi * radius**2
         else:
             theta = torch.empty(num_points, 1).uniform_(0, np.pi)
@@ -208,8 +237,9 @@ class ERTDataset(Dataset):
         # directly at every pseudo-point was collapsing the model to its
         # survey median.  The contrast is normalized robustly and clipped so
         # outliers cannot create unbounded conductivity.
-        rho_reference = float(np.median(rho_a_np))
-        rho_low = float(np.percentile(rho_a_np, 10.0))
+        rho_abs = np.abs(rho_a_np)
+        rho_reference = float(np.median(rho_abs))
+        rho_low = float(np.percentile(rho_abs, 10.0))
         contrast = np.clip(
             (rho_reference - rho_a_np) / max(rho_reference - rho_low, 1e-6),
             0.0,
@@ -233,11 +263,11 @@ class ERTDataset(Dataset):
         # PDE; it only tells the inversion where the survey sees a contrast.
         midpoint_np = 0.5 * (elec_pos_np[:, 2, :] + elec_pos_np[:, 3, :])
         pseudo_depth_np = 0.5 * np.linalg.norm(a_np - midpoint_np, axis=1)
-        max_depth = max(-self.z_min - 1.0, 1.0)
+        max_depth = max(self.z_max - 1.0, 1.0)
         pseudo_depth_np = np.clip(pseudo_depth_np, 1.0, max_depth)
         r_sigma_data = midpoint_np.copy()
-        # Pseudo-depth is a positive distance; the PINN domain points down.
-        r_sigma_data[:, 2] = -pseudo_depth_np
+        # The campaign convention is z=0 at the surface and z>0 downward.
+        r_sigma_data[:, 2] = pseudo_depth_np
 
         source = torch.cat([r_A_all, r_B_all], dim=1)
         source_pool = torch.tensor(np.unique(source.numpy(), axis=0), dtype=torch.float32)

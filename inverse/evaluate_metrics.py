@@ -8,15 +8,17 @@ def evaluate(npy_path, h5_path):
     # Cargar la predicción
     rho_pred = np.load(npy_path)
     
-    # Reconstruir el Ground Truth (La esfera real)
+    # Use the exact discretized ground truth saved with the campaign.  Rebuilding
+    # an ideal sphere can disagree with TreeMesh interpolation at the boundary.
     with h5py.File(h5_path, "r") as handle:
-        metadata = handle["metadata"].attrs
-        nx, ny, nz = 100, 100, 50
-        gx = np.linspace(0.5, 99.5, nx)
-        gy = np.linspace(0.5, 99.5, ny)
-        gz = np.linspace(0.5, 49.5, nz)
+        gt = handle["ground_truth_conductivity"]
+        sigma_true = np.asarray(gt["conductivity_tensor"], dtype=np.float32)
+        gx = np.asarray(gt["grid_x"], dtype=np.float32)
+        gy = np.asarray(gt["grid_y"], dtype=np.float32)
+        gz = np.asarray(gt["grid_z"], dtype=np.float32)
         X, Y, Z = np.meshgrid(gx, gy, gz, indexing="ij")
-        
+        nx, ny, nz = sigma_true.shape
+        metadata = handle["metadata"].attrs
         sx = float(metadata.get("sphere_x", 50.0))
         sy = float(metadata.get("sphere_y", 50.0))
         sz = float(metadata.get("sphere_z", 25.0))
@@ -24,15 +26,14 @@ def evaluate(npy_path, h5_path):
         srho = float(metadata.get("sphere_rho", 30.0))
         bg_rho = float(metadata.get("bg_resistivity", 100.0))
         
-        distance = np.sqrt((X - sx)**2 + (Y - sy)**2 + (Z - sz)**2)
-        target_rho = np.full((nx, ny, nz), bg_rho, dtype=np.float32)
-        
-        anomaly_mask = distance <= sr
-        target_rho[anomaly_mask] = srho
+        target_rho = 1.0 / np.maximum(sigma_true, 1e-8)
+        anomaly_mask = target_rho < np.sqrt(bg_rho * srho)
         
     # Si la predicción se hizo a baja resolución, la interpolamos para poder comparar peras con peras
-    if rho_pred.shape == (50, 50, 25):
-        rho_pred = np.repeat(np.repeat(np.repeat(rho_pred, 2, 0), 2, 1), 2, 2)
+    if rho_pred.shape != target_rho.shape:
+        from scipy.ndimage import zoom
+        factors = tuple(t / p for t, p in zip(target_rho.shape, rho_pred.shape))
+        rho_pred = zoom(rho_pred, factors, order=1)
         
     if rho_pred.shape != target_rho.shape:
         print(f"Ignorando {npy_path}: Dimensiones incompatibles {rho_pred.shape}")
